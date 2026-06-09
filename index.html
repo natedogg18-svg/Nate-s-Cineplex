@@ -396,9 +396,6 @@ footer{
   text-align:center;font-family:'Press Start 2P',monospace;
   font-size:0.4rem;color:var(--muted-fg);
 }
-</style>
-
-
 /* ── WATCHLIST TAB ── */
 .tab.active-yellow{background:var(--yellow);color:var(--bg);box-shadow:0 0 12px var(--yellow);}
 
@@ -410,9 +407,6 @@ footer{
 }
 .detail-modal-box::-webkit-scrollbar{width:4px;}
 .detail-modal-box::-webkit-scrollbar-thumb{background:var(--pink);}
-
-/* ── FAVICON (inline SVG) ── */
-
 </style>
 </head>
 <body>
@@ -427,7 +421,7 @@ footer{
     <div class="header-nav">
       <div style="display:flex;align-items:center;gap:0.5rem;">
         <button class="mute-btn" id="mute-btn" onclick="toggleMute()">♪ ON</button>
-        <input type="range" id="volume-slider" min="0" max="100" value="40"
+        <input type="range" id="volume-slider" min="0" max="100" value="25"
           oninput="setVolume(this.value)"
           style="width:80px;height:4px;accent-color:var(--pink);cursor:pointer;"
           title="Volume">
@@ -1551,7 +1545,7 @@ function esc(s){
 // ═══════════════════════════════════════
 let bgMusic = null;
 let muted = false;
-let currentVolume = 0.4;
+let currentVolume = 0.25;
 
 function initMusic() {
   if (bgMusic) return;
