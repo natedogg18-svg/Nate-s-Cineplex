@@ -505,7 +505,7 @@ let bulkSelected = new Set();
 let adminEmailAddress = localStorage.getItem('cineplex_email') || '';
 let discordWebhook = localStorage.getItem('cineplex_discord') || '';
 let plexToken = localStorage.getItem('cineplex_plex_token') || 'Spio8f3MBdTQEghVYsst';
-let plexUrl = localStorage.getItem('cineplex_plex_url') || 'https://10-0-0-183.1205329c054c4486815295e65f6de585.plex.direct:32400';
+let plexUrl = localStorage.getItem('cineplex_plex_url') || 'https://year-plain-demanding-climate.trycloudflare.com';
 let plexLibrary = [];
 let plexLoaded = false;
 let trendingSort = 'popular'; // 'popular' | 'rating' | 'newest'
@@ -1149,6 +1149,7 @@ function submitName() {
   startMusicOnInteraction();
   loadRequests().then(()=>{
     loadWatchlist();
+    loadPlexLibrary();
     loadTrending().then(()=>render());
     render();
   });
@@ -1571,7 +1572,36 @@ function getSortedTrending() {
 function setTrendingSort(s) { trendingSort=s; render(); }
 
 // ── PLEX CHECK ──
+async function loadPlexLibrary() {
+  if (plexLoaded || !plexToken || !plexUrl) return;
+  try {
+    const res = await fetch(`${plexUrl}/library/sections?X-Plex-Token=${plexToken}`, {
+      headers: { 'Accept': 'application/json' }
+    });
+    const data = await res.json();
+    const sections = data.MediaContainer?.Directory || [];
+    const allTitles = [];
+    for (const section of sections) {
+      if (section.type === 'movie' || section.type === 'show') {
+        const r = await fetch(`${plexUrl}/library/sections/${section.key}/all?X-Plex-Token=${plexToken}&X-Plex-Container-Size=1000`, {
+          headers: { 'Accept': 'application/json' }
+        });
+        const d = await r.json();
+        const items = d.MediaContainer?.Metadata || [];
+        items.forEach(m => allTitles.push(m.title?.toLowerCase()));
+      }
+    }
+    plexLibrary = allTitles;
+    plexLoaded = true;
+    console.log(`Plex library loaded: ${allTitles.length} titles`);
+    render();
+  } catch(e) { console.error('Plex library error:', e); }
+}
+
 function isApprovedOnPlex(movie) {
+  if (plexLoaded && plexLibrary.length > 0) {
+    return plexLibrary.includes(movie.title?.toLowerCase());
+  }
   return requests.some(r=>
     r.tmdb_id===String(movie.id) &&
     r.tmdb_type===movie.tmdbType &&
@@ -1717,6 +1747,7 @@ window.addEventListener('keydown',startMusicOnInteraction);
 loadSavedVolume();
 if (playerName) {
   Promise.all([loadRequests(), loadWatchlist()]).then(()=>{
+    loadPlexLibrary();
     loadTrending().then(()=>render());
     render();
   });
