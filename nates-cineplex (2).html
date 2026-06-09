@@ -432,11 +432,10 @@ footer{
 // ═══════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════
-const TMDB_TOKEN = 'eyJhdWQiOiIwOWE0N2FjNmUxMDA4ODY5YzZjY2UxYzVhNTUwOGNmOCIsIm5iZiI6MTc4MDk4ODA3My44MDQ5OTk4LCJzdWIiOiI2YTI3YjhhOWQwYzdmNjUwNDY5NTRkNTciLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0';
+const TMDB_KEY = '09a47ac6e1008869c6cce1c5a5508cf8';
 const TMDB = 'https://api.themoviedb.org/3';
 const IMG  = 'https://image.tmdb.org/t/p/w500';
 const IMG_SM = 'https://image.tmdb.org/t/p/w185';
-const HEADERS = { Authorization: `Bearer ${TMDB_TOKEN}`, 'Content-Type': 'application/json' };
 const ADMIN_PIN = '1984';
 
 // ═══════════════════════════════════════
@@ -478,24 +477,31 @@ function getStats() {
 // ═══════════════════════════════════════
 // TMDB API
 // ═══════════════════════════════════════
+async function tmdbFetch(url) {
+  const sep = url.includes('?') ? '&' : '?';
+  const res = await fetch(`${url}${sep}api_key=${TMDB_KEY}`);
+  if (!res.ok) throw new Error(`TMDB ${res.status}`);
+  return res.json();
+}
+
 async function tmdbSearch(q) {
-  const [movRes, tvRes] = await Promise.all([
-    fetch(`${TMDB}/search/movie?query=${encodeURIComponent(q)}&language=en-US&page=1`, {headers:HEADERS}),
-    fetch(`${TMDB}/search/tv?query=${encodeURIComponent(q)}&language=en-US&page=1`,    {headers:HEADERS}),
-  ]);
-  const [movData, tvData] = await Promise.all([movRes.json(), tvRes.json()]);
-  const movies = (movData.results||[]).map(m=>({...m, _type:'movie'}));
-  const tvs    = (tvData.results||[]).map(m=>({...m, _type:'tv'}));
-  let combined = [...movies,...tvs].sort((a,b)=>(b.popularity||0)-(a.popularity||0));
-  if (typeFilter==='movie') combined = movies;
-  if (typeFilter==='series') combined = tvs;
-  return combined.slice(0,18);
+  const type = typeFilter;
+  const searches = [];
+  if (!type || type === 'all' || type === 'movie') {
+    searches.push(tmdbFetch(`${TMDB}/search/movie?query=${encodeURIComponent(q)}&language=en-US&page=1`)
+      .then(d => (d.results||[]).map(m=>({...m,_type:'movie'}))));
+  }
+  if (!type || type === 'all' || type === 'series') {
+    searches.push(tmdbFetch(`${TMDB}/search/tv?query=${encodeURIComponent(q)}&language=en-US&page=1`)
+      .then(d => (d.results||[]).map(m=>({...m,_type:'tv'}))));
+  }
+  const arrays = await Promise.all(searches);
+  return arrays.flat().sort((a,b)=>(b.popularity||0)-(a.popularity||0)).slice(0,18);
 }
 
 async function tmdbDetails(id, type) {
   const ep = type==='tv'?'tv':'movie';
-  const res = await fetch(`${TMDB}/${ep}/${id}?language=en-US`, {headers:HEADERS});
-  return res.json();
+  return tmdbFetch(`${TMDB}/${ep}/${id}?language=en-US`);
 }
 
 function mapResult(m) {
@@ -1175,10 +1181,10 @@ function playNote(freq,t,dur,type,gain,atk=0.005,rel=0.06,detune=0){
 function playKick(t){
   if(!audioCtx||!masterGain||!isFinite(t))return;
   const o=audioCtx.createOscillator(),g=audioCtx.createGain();
-  o.type='sine';o.frequency.setValueAtTime(150,t);
-  o.frequency.exponentialRampToValueAtTime(40,t+0.1);
-  g.gain.setValueAtTime(0.5,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.14);
-  o.connect(g);g.connect(masterGain);o.start(t);o.stop(t+0.15);
+  o.type='sine';o.frequency.setValueAtTime(180,t);
+  o.frequency.exponentialRampToValueAtTime(30,t+0.18);
+  g.gain.setValueAtTime(0.7,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.22);
+  o.connect(g);g.connect(masterGain);o.start(t);o.stop(t+0.23);
 }
 
 function playSnare(t){
@@ -1207,18 +1213,33 @@ function scheduleMelody(){
     const ms=MELODY[beatIndex%MELODY.length];
     const as=ARPEGGIO[arpIndex%ARPEGGIO.length];
     const bd=ms[1]/BPS,ad=as[1]/BPS;
-    const mFreq = NOTE[ms[0]] || 0;
-    const aFreq = NOTE[as[0]] || 0;
+    const mFreq=NOTE[ms[0]]||0;
+    const aFreq=NOTE[as[0]]||0;
+
+    // Lead — cold sawtooth, long slow attack, slight detune for chorus width
     if(mFreq>0){
-      playNote(mFreq,nextNoteTime,bd*0.85,'sawtooth',0.25,0.008,0.08);
-      playNote(mFreq,nextNoteTime,bd*0.85,'square',0.1,0.008,0.08,7);
+      playNote(mFreq,nextNoteTime,bd*0.9,'sawtooth',0.22,0.04,0.15);
+      playNote(mFreq,nextNoteTime,bd*0.9,'sawtooth',0.08,0.04,0.15,-12);
+      // Ghost echo — quieter, slightly delayed
+      playNote(mFreq,nextNoteTime+0.07,bd*0.7,'triangle',0.06,0.02,0.12);
     }
-    if(aFreq>0) playNote(aFreq,nextNoteTime,ad*0.7,'triangle',0.12,0.003,0.04);
+
+    // Arpeggio — square wave, crisp and cold
+    if(aFreq>0) playNote(aFreq,nextNoteTime,ad*0.6,'square',0.09,0.002,0.03);
+
+    // Bass — deep sub sawtooth, one per 2 full beats
     if(beatIndex%8===0){
       const bs=BASS[bassIndex%BASS.length];
-      const bFreq = NOTE[bs[0]] || 0;
-      if(bFreq>0){playNote(bFreq,nextNoteTime,(bs[1]*2)/BPS*0.8,'sawtooth',0.2,0.01,0.1);bassIndex++;}
+      const bFreq=NOTE[bs[0]]||0;
+      if(bFreq>0){
+        // Sub bass sine layer
+        playNote(bFreq,nextNoteTime,(bs[1]*2)/BPS*0.95,'sine',0.35,0.02,0.2);
+        // Gritty sawtooth on top
+        playNote(bFreq*2,nextNoteTime,(bs[1]*2)/BPS*0.8,'sawtooth',0.1,0.02,0.15);
+        bassIndex++;
+      }
     }
+
     const di=drumStep%KICK.length;
     if(KICK[di])playKick(nextNoteTime);
     if(SNARE[di])playSnare(nextNoteTime);
