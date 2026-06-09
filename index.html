@@ -1149,7 +1149,6 @@ function submitName() {
   startMusicOnInteraction();
   loadRequests().then(()=>{
     loadWatchlist();
-    loadPlexLibrary();
     loadTrending().then(()=>render());
     render();
   });
@@ -1199,7 +1198,6 @@ async function doSearch() {
   activeTab = 'request';
   render();
   try {
-    // Check if it looks like a person search (starts with "actor:" or "director:" or we try person first)
     const isPerson = searchTerm.toLowerCase().startsWith('actor:') || searchTerm.toLowerCase().startsWith('director:');
     const cleanQuery = searchTerm.replace(/^(actor|director):\s*/i,'');
 
@@ -1208,12 +1206,8 @@ async function doSearch() {
       raw = await searchByPerson(cleanQuery);
     } else {
       raw = await tmdbSearch(searchTerm);
-      // If no results, try as person
-      if (raw.length === 0) {
-        raw = await searchByPerson(searchTerm);
-      }
     }
-    searchResults = raw.map ? raw.map(m=>m.id?m:mapResult(m)) : [];
+    searchResults = raw.map(m => m.tmdbType ? m : mapResult(m));
     movieCache = {};
     searchResults.forEach(m => { movieCache[m.id] = m; });
   } catch(e) { console.error('Search error:', e); searchResults = []; }
@@ -1577,37 +1571,7 @@ function getSortedTrending() {
 function setTrendingSort(s) { trendingSort=s; render(); }
 
 // ── PLEX CHECK ──
-async function loadPlexLibrary() {
-  if (plexLoaded || !plexToken || !plexUrl) return;
-  try {
-    const res = await fetch(`${plexUrl}/library/sections?X-Plex-Token=${plexToken}`, {
-      headers: { 'Accept': 'application/json' }
-    });
-    const data = await res.json();
-    const sections = data.MediaContainer?.Directory || [];
-    const allTitles = [];
-    for (const section of sections) {
-      if (section.type === 'movie' || section.type === 'show') {
-        const r = await fetch(`${plexUrl}/library/sections/${section.key}/all?X-Plex-Token=${plexToken}&X-Plex-Container-Size=1000`, {
-          headers: { 'Accept': 'application/json' }
-        });
-        const d = await r.json();
-        const items = d.MediaContainer?.Metadata || [];
-        items.forEach(m => allTitles.push(m.title?.toLowerCase()));
-      }
-    }
-    plexLibrary = allTitles;
-    plexLoaded = true;
-    render();
-  } catch(e) { console.error('Plex library error:', e); }
-}
-
 function isApprovedOnPlex(movie) {
-  // Check real Plex library first
-  if (plexLoaded && plexLibrary.length > 0) {
-    return plexLibrary.includes(movie.title?.toLowerCase());
-  }
-  // Fall back to approved requests
   return requests.some(r=>
     r.tmdb_id===String(movie.id) &&
     r.tmdb_type===movie.tmdbType &&
@@ -1753,7 +1717,6 @@ window.addEventListener('keydown',startMusicOnInteraction);
 loadSavedVolume();
 if (playerName) {
   Promise.all([loadRequests(), loadWatchlist()]).then(()=>{
-    loadPlexLibrary();
     loadTrending().then(()=>render());
     render();
   });
