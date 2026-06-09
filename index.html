@@ -4,7 +4,9 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1"/>
 <title>Nate's Cineplex</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23050614'/><text y='24' font-size='24' x='4'>🎬</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 
@@ -395,6 +397,23 @@ footer{
   font-size:0.4rem;color:var(--muted-fg);
 }
 </style>
+
+
+/* ── WATCHLIST TAB ── */
+.tab.active-yellow{background:var(--yellow);color:var(--bg);box-shadow:0 0 12px var(--yellow);}
+
+/* ── DETAIL MODAL ── */
+.detail-modal-box{
+  background:var(--card);border:4px solid var(--pink);
+  box-shadow:0 0 40px rgba(255,0,255,0.3);
+  max-width:720px;width:100%;max-height:92vh;overflow-y:auto;position:relative;
+}
+.detail-modal-box::-webkit-scrollbar{width:4px;}
+.detail-modal-box::-webkit-scrollbar-thumb{background:var(--pink);}
+
+/* ── FAVICON (inline SVG) ── */
+
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -422,7 +441,7 @@ footer{
   <footer>© 1994 NATE'S CINEPLEX ENTERTAINMENT</footer>
 </div>
 
-<!-- MODALS -->
+<!-- SEASON MODAL -->
 <div class="modal-overlay" id="season-modal" style="display:none" onclick="closeSeasonModal(event)">
   <div class="modal-box" onclick="e=>e.stopPropagation()">
     <div class="modal-top-bar"></div>
@@ -430,6 +449,15 @@ footer{
   </div>
 </div>
 
+<!-- DETAIL MODAL -->
+<div class="modal-overlay" id="detail-modal" style="display:none" onclick="if(event.target===this)closeDetailModal()">
+  <div class="detail-modal-box">
+    <div class="modal-top-bar"></div>
+    <div style="padding:1.5rem;" id="detail-modal-inner"></div>
+  </div>
+</div>
+
+<!-- PIN MODAL -->
 <div class="modal-overlay" id="pin-modal" style="display:none" onclick="closePinModal(event)">
   <div class="pin-box" onclick="e=>e.stopPropagation()" id="pin-box-inner"></div>
 </div>
@@ -445,21 +473,28 @@ const IMG  = 'https://image.tmdb.org/t/p/w500';
 const IMG_SM = 'https://image.tmdb.org/t/p/w185';
 const ADMIN_PIN = '5529';
 
+const SB_URL = 'https://qdzwrsdwmclqaqwxiqbn.supabase.co';
+const SB_KEY = 'sb_publishable_yAZTqD15sk8gjuRJly10AA_XwtBpfeF';
+const SB_HEADERS = { 'Content-Type': 'application/json', 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` };
+
 // ═══════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════
-let playerName = '';
+let playerName = localStorage.getItem('cineplex_player') || '';
 let isAdmin = false;
-let activeTab = 'request'; // 'request' | 'plex'
-let typeFilter = 'all';    // 'all' | 'movie' | 'series'
+let activeTab = 'request';
+let typeFilter = 'all';
+let genreFilter = 0;
 let searchTerm = '';
 let searchQuery = '';
 let note = '';
-let requests = JSON.parse(localStorage.getItem('cineplex_v3') || '[]');
+let requests = [];
+let watchlist = [];
 let adminStatusFilter = 'all';
 let adminTypeFilter = 'all';
 let selectedReqId = null;
 let pendingMovie = null;
+let detailMovie = null;
 let pinBuffer = '';
 let pinError = false;
 let searchResults = [];
@@ -469,20 +504,60 @@ let trendingResults = [];
 let trendingLoaded = false;
 let bulkSelected = new Set();
 let adminEmailAddress = localStorage.getItem('cineplex_email') || '';
+let discordWebhook = localStorage.getItem('cineplex_discord') || '';
+
+const GENRES = [
+  {id:0,name:'All'},{id:28,name:'Action'},{id:12,name:'Adventure'},
+  {id:16,name:'Animation'},{id:35,name:'Comedy'},{id:80,name:'Crime'},
+  {id:18,name:'Drama'},{id:27,name:'Horror'},{id:10749,name:'Romance'},
+  {id:878,name:'Sci-Fi'},{id:53,name:'Thriller'},{id:14,name:'Fantasy'}
+];
 
 // ═══════════════════════════════════════
-// PERSISTENCE
+// SUPABASE API
 // ═══════════════════════════════════════
-function saveRequests() { localStorage.setItem('cineplex_v3', JSON.stringify(requests)); }
+async function sbFetch(path, method='GET', body=null) {
+  const opts = { method, headers: SB_HEADERS };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(`${SB_URL}/rest/v1/${path}`, opts);
+  if (!res.ok) { const e = await res.text(); throw new Error(e); }
+  if (res.status === 204) return null;
+  return res.json();
+}
 
-function getStats() {
-  return {
-    total: requests.length,
-    pending: requests.filter(r=>r.status==='pending').length,
-    approved: requests.filter(r=>r.status==='approved').length,
-    denied: requests.filter(r=>r.status==='denied').length,
-    soon: requests.filter(r=>r.status==='soon').length,
-  };
+async function loadRequests() {
+  try {
+    const data = await sbFetch('requests?order=created_at.desc&select=*');
+    requests = data || [];
+  } catch(e) { console.error('Load requests error:', e); requests = []; }
+}
+
+async function loadWatchlist() {
+  if (!playerName || isAdmin) return;
+  try {
+    const data = await sbFetch(`watchlist?added_by=eq.${encodeURIComponent(playerName)}&order=created_at.desc&select=*`);
+    watchlist = data || [];
+  } catch(e) { console.error('Load watchlist error:', e); watchlist = []; }
+}
+
+async function addRequest(req) {
+  return sbFetch('requests', 'POST', req);
+}
+
+async function updateRequest(id, updates) {
+  return sbFetch(`requests?id=eq.${id}`, 'PATCH', updates);
+}
+
+async function deleteRequestDb(id) {
+  return sbFetch(`requests?id=eq.${id}`, 'DELETE');
+}
+
+async function addWatchlistItem(item) {
+  return sbFetch('watchlist', 'POST', item);
+}
+
+async function removeWatchlistItem(id) {
+  return sbFetch(`watchlist?id=eq.${id}`, 'DELETE');
 }
 
 // ═══════════════════════════════════════
@@ -499,13 +574,12 @@ async function tmdbFetch(url) {
 }
 
 async function tmdbSearch(q) {
-  const type = typeFilter;
   const searches = [];
-  if (!type || type === 'all' || type === 'movie') {
+  if (!typeFilter || typeFilter === 'all' || typeFilter === 'movie') {
     searches.push(tmdbFetch(`${TMDB}/search/movie?query=${encodeURIComponent(q)}&language=en-US&page=1`)
       .then(d => (d.results||[]).map(m=>({...m,_type:'movie'}))));
   }
-  if (!type || type === 'all' || type === 'series') {
+  if (!typeFilter || typeFilter === 'all' || typeFilter === 'series') {
     searches.push(tmdbFetch(`${TMDB}/search/tv?query=${encodeURIComponent(q)}&language=en-US&page=1`)
       .then(d => (d.results||[]).map(m=>({...m,_type:'tv'}))));
   }
@@ -515,13 +589,17 @@ async function tmdbSearch(q) {
 
 async function tmdbDetails(id, type) {
   const ep = type==='tv'?'tv':'movie';
-  return tmdbFetch(`${TMDB}/${ep}/${id}?language=en-US`);
+  return tmdbFetch(`${TMDB}/${ep}/${id}?language=en-US&append_to_response=credits`);
 }
 
 async function loadTrending() {
   if (trendingLoaded) return;
   try {
-    const data = await tmdbFetch(`${TMDB}/trending/all/week?language=en-US`);
+    let url = `${TMDB}/trending/all/week?language=en-US`;
+    if (genreFilter && genreFilter !== 0) {
+      url = `${TMDB}/discover/movie?sort_by=popularity.desc&with_genres=${genreFilter}&language=en-US&page=1`;
+    }
+    const data = await tmdbFetch(url);
     trendingResults = (data.results||[])
       .filter(m=>m.media_type!=='person')
       .map(m=>mapResult({...m, _type: m.media_type==='tv'?'tv':'movie'}));
@@ -542,19 +620,30 @@ function mapResult(m) {
     rating: m.vote_average ? m.vote_average.toFixed(1) : 'N/A',
     seasons: m.number_of_seasons || null,
     tmdbType: m._type,
+    overview: m.overview || '',
+    genreIds: m.genre_ids || [],
   };
 }
 
 // ═══════════════════════════════════════
-// DUPLICATE / QUEUE HELPERS
+// HELPERS
 // ═══════════════════════════════════════
+function getStats() {
+  return {
+    total: requests.length,
+    pending: requests.filter(r=>r.status==='pending').length,
+    approved: requests.filter(r=>r.status==='approved').length,
+    denied: requests.filter(r=>r.status==='denied').length,
+    soon: requests.filter(r=>r.status==='soon').length,
+  };
+}
+
 function getRequestedMap() {
-  // returns Map<tmdbKey, [{status,season}]>
   const map = new Map();
   for (const r of requests) {
-    const key = `${r.tmdbType}_${r.mediaId}`;
+    const key = `${r.tmdb_type}_${r.tmdb_id}`;
     if (!map.has(key)) map.set(key, []);
-    map.get(key).push({status:r.status, season:r.season||null});
+    map.get(key).push({status:r.status, season:r.season||null, id:r.id, requested_by:r.requested_by, created_at:r.created_at});
   }
   return map;
 }
@@ -567,7 +656,6 @@ function getDupStatus(movie) {
     const e = entries.find(e=>e.season===null||e.season==='');
     return e ? e.status : null;
   }
-  // TV: only dup if "All Seasons" requested
   const allEntry = entries.find(e=>!e.season||e.season==='All Seasons');
   return allEntry ? allEntry.status : null;
 }
@@ -577,6 +665,21 @@ function getTakenSeasons(movie) {
   const map = getRequestedMap();
   const entries = map.get(key) || [];
   return new Set(entries.filter(e=>e.status==='pending'||e.status==='approved').map(e=>e.season||'All Seasons'));
+}
+
+function isInWatchlist(movie) {
+  return watchlist.some(w=>w.tmdb_id===String(movie.id)&&w.tmdb_type===movie.tmdbType);
+}
+
+function getWatchlistId(movie) {
+  const w = watchlist.find(w=>w.tmdb_id===String(movie.id)&&w.tmdb_type===movie.tmdbType);
+  return w ? w.id : null;
+}
+
+function getRequestHistory(movie) {
+  const key = `${movie.tmdbType}_${movie.id}`;
+  const map = getRequestedMap();
+  return map.get(key) || [];
 }
 
 // ═══════════════════════════════════════
@@ -589,7 +692,7 @@ function render() {
   app.innerHTML = renderHome();
 }
 
-// ── NAME SCREEN ──────────────────────────────────────────
+// ── NAME SCREEN ──
 function renderNameScreen() {
   return `
   <div style="max-width:480px;margin:3rem auto;">
@@ -610,7 +713,7 @@ function renderNameScreen() {
   </div>`;
 }
 
-// ── HOME ────────────────────────────────────────────────
+// ── HOME ──
 function renderHome() {
   const stats = getStats();
   const statsBanner = stats.total > 0 ? `
@@ -624,21 +727,21 @@ function renderHome() {
     </div>` : '';
 
   return `
-  <!-- PLAYER CARD -->
   <div class="pcard pcard-cyan" style="margin-bottom:1.5rem;">
     <div class="pcard-title">PLAYER ENTRY</div>
     <div style="margin-top:0.5rem;" class="player-grid">
       <div>
         <label class="field-label" style="color:var(--cyan)">ENTER INITIALS / NAME:</label>
         <input class="pinput" id="player-name-input" value="${esc(playerName)}"
-          onchange="playerName=this.value" maxlength="24" placeholder="AAA">
+          onchange="updatePlayerName(this.value)" maxlength="24" placeholder="AAA">
       </div>
       <div>
         <label class="field-label" style="color:var(--pink)">SEARCH DATABASE:</label>
         <div class="search-row">
           <input class="pinput" id="search-input" value="${esc(searchQuery)}"
-            onkeydown="if(event.key==='Enter')doSearch()" placeholder="TITLE OR IMDB ID">
+            onkeydown="if(event.key==='Enter')doSearch()" placeholder="TITLE...">
           <button class="pbtn pbtn-pink" onclick="doSearch()">SEARCH</button>
+          ${searchTerm?`<button class="pbtn pbtn-ghost" onclick="clearSearch()">✕</button>`:''}
         </div>
       </div>
     </div>
@@ -650,32 +753,44 @@ function renderHome() {
     <div class="type-row">
       <span class="type-label">TYPE:</span>
       ${['all','movie','series'].map(t=>`
-        <button class="pbtn ${typeFilter===t?'pbtn-pink':'pbtn-ghost'}"
-          style="padding:6px 12px"
+        <button class="pbtn ${typeFilter===t?'pbtn-pink':'pbtn-ghost'}" style="padding:6px 12px"
           onclick="setTypeFilter('${t}')">
           ${t==='all'?'ALL':t==='movie'?'FILMS':'TV SHOWS'}
         </button>`).join('')}
     </div>
   </div>
 
-  <!-- TABS -->
   <div class="tabs">
     <button class="tab ${activeTab==='request'?'active-pink':''}" onclick="setTab('request')">▶ REQUEST</button>
     <button class="tab ${activeTab==='plex'?'active-green':''}" onclick="setTab('plex')">★ NOW ON PLEX</button>
+    <button class="tab ${activeTab==='watchlist'?'active-yellow':''}" onclick="setTab('watchlist')">♥ WATCHLIST ${watchlist.length>0?`(${watchlist.length})`:''}</button>
   </div>
 
-  ${activeTab==='request' ? renderRequestTab(statsBanner) : renderPlexTab()}
+  ${activeTab==='request' ? renderRequestTab(statsBanner) : activeTab==='plex' ? renderPlexTab() : renderWatchlistTab()}
   `;
 }
 
 function renderRequestTab(statsBanner) {
   if (isLoading) return `<div class="loading">SEARCHING DB...</div>`;
+
   if (!searchTerm) {
+    // Genre filter bar
+    const genreBar = `
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:1.25rem;">
+        ${GENRES.map(g=>`
+          <button class="pbtn ${genreFilter===g.id?'pbtn-yellow':'pbtn-ghost'}"
+            style="padding:4px 10px;font-size:0.45rem;"
+            onclick="setGenreFilter(${g.id})">${g.name}</button>`).join('')}
+      </div>`;
+
     const trendingSection = trendingResults.length > 0 ? `
-      <p style="font-family:'Press Start 2P',monospace;font-size:0.55rem;color:var(--yellow);text-shadow:0 0 6px var(--yellow);margin-bottom:1rem;">🔥 TRENDING THIS WEEK</p>
-      <div class="movie-grid">
-        ${trendingResults.map(m => renderMovieCard(m)).join('')}
-      </div>` : `<div class="loading">LOADING TRENDING...</div>`;
+      ${genreBar}
+      <p style="font-family:'Press Start 2P',monospace;font-size:0.55rem;color:var(--yellow);text-shadow:0 0 6px var(--yellow);margin-bottom:1rem;">
+        🔥 ${genreFilter?GENRES.find(g=>g.id===genreFilter)?.name+' PICKS':'TRENDING THIS WEEK'}
+      </p>
+      <div class="movie-grid">${trendingResults.map(m => renderMovieCard(m)).join('')}</div>`
+      : `${genreBar}<div class="loading">LOADING TRENDING...</div>`;
+
     return `${statsBanner}${trendingSection}`;
   }
 
@@ -688,9 +803,7 @@ function renderRequestTab(statsBanner) {
   return `
     ${statsBanner}
     <p style="font-family:'Press Start 2P',monospace;font-size:0.55rem;color:var(--cyan);margin-bottom:1rem;">SELECT CARTRIDGE:</p>
-    <div class="movie-grid">
-      ${searchResults.map(m => renderMovieCard(m)).join('')}
-    </div>`;
+    <div class="movie-grid">${searchResults.map(m => renderMovieCard(m)).join('')}</div>`;
 }
 
 function renderMovieCard(m) {
@@ -699,10 +812,11 @@ function renderMovieCard(m) {
   const isDup = !isTV && dup;
   const isComingSoon = dup === 'soon';
   const isDisabled = isDup || isComingSoon;
+  const inWL = isInWatchlist(m);
 
   let btnLabel = isTV ? 'SELECT SEASON ▶' : 'REQUEST ADD';
   let btnClass = isTV ? 'pbtn-yellow' : 'pbtn-pink';
-  if (isComingSoon)   { btnLabel = '★ COMING SOON'; btnClass = 'pbtn-ghost'; }
+  if (isComingSoon)        { btnLabel = '★ COMING SOON'; btnClass = 'pbtn-ghost'; }
   else if (dup==='pending')  { btnLabel = 'IN QUEUE...';  btnClass = 'pbtn-ghost'; }
   else if (dup==='approved') { btnLabel = 'ON PLEX ✓';    btnClass = 'pbtn-ghost'; }
 
@@ -711,29 +825,34 @@ function renderMovieCard(m) {
       <p style="color:${isComingSoon?'var(--purple)':dup==='pending'?'var(--yellow)':'var(--green)'}">
         ${isComingSoon?'★ COMING SOON':dup==='pending'?'ALREADY IN QUEUE':'ALREADY APPROVED'}
       </p>
-      <p style="color:var(--muted-fg);font-size:0.4rem;">${isComingSoon?'NOT ON PLEX YET':dup==='pending'?'REQUEST Pending':'ON THE PLEX'}</p>
     </div>` : '';
 
   movieCache[m.id] = m;
   return `
-    <div class="movie-card ${isDisabled?'is-dup':''}" onclick="${isDisabled?'':isTV?`openSeasonModal(${m.id})`:`requestMovieById(${m.id},null)`}">
-      ${m.poster
-        ? `<img class="card-poster" src="${m.poster}" alt="${esc(m.title)}" loading="lazy">`
-        : `<div class="card-no-poster">NO POSTER</div>`}
-      <div class="${isTV?'badge-tv':'badge-film'}">${isTV?'TV':'FILM'}</div>
-      <div class="badge-year">${m.year}</div>
-      ${dupOverlay}
+    <div class="movie-card ${isDisabled?'is-dup':''}">
+      <div onclick="openDetailModal(${m.id})" style="cursor:pointer;position:relative;">
+        ${m.poster
+          ? `<img class="card-poster" src="${m.poster}" alt="${esc(m.title)}" loading="lazy">`
+          : `<div class="card-no-poster">NO POSTER</div>`}
+        <div class="${isTV?'badge-tv':'badge-film'}">${isTV?'TV':'FILM'}</div>
+        <div class="badge-year">${m.year}</div>
+        ${dupOverlay}
+      </div>
       <div class="card-body">
-        <div class="card-title">${esc(m.title)}</div>
+        <div class="card-title" onclick="openDetailModal(${m.id})" style="cursor:pointer;">${esc(m.title)}</div>
         <div class="card-meta">
-          <span>${isTV&&m.seasons?m.seasons+' SEASONS':m.rating}</span>
+          <span>${isTV&&m.seasons?m.seasons+' S':m.rating}</span>
           <span>★ ${m.rating}</span>
         </div>
-        <div class="card-btn">
-          <button class="pbtn ${btnClass}" style="width:100%;padding:8px 4px;font-size:0.45rem;"
-            ${isDisabled?'disabled':''}>
+        <div style="display:flex;gap:4px;margin-top:auto;">
+          <button class="pbtn ${btnClass}" style="flex:1;padding:6px 4px;font-size:0.4rem;"
+            ${isDisabled?'disabled':''}
+            onclick="${isDisabled?'':isTV?`openSeasonModal(${m.id})`:`requestMovieById(${m.id},null)`}">
             ${btnLabel}
           </button>
+          <button class="pbtn ${inWL?'pbtn-red':'pbtn-ghost'}" style="padding:6px 8px;font-size:0.5rem;"
+            onclick="${inWL?`removeFromWatchlist(${getWatchlistId(m)})`:`addToWatchlist(${m.id})`}"
+            title="${inWL?'Remove from watchlist':'Add to watchlist'}">♥</button>
         </div>
       </div>
     </div>`;
@@ -746,136 +865,139 @@ function renderPlexTab() {
       <p style="color:var(--green);animation:blink 1s step-start infinite;">★ NOTHING YET ★</p>
       <p style="margin-top:0.5rem;">APPROVED TITLES WILL APPEAR HERE</p>
     </div>`;
-
   return `
-    <p style="font-family:'Press Start 2P',monospace;font-size:0.6rem;color:var(--green);text-shadow:0 0 8px var(--green);margin-bottom:1rem;">
-      ★ NOW ON PLEX (${approved.length})
-    </p>
+    <p style="font-family:'Press Start 2P',monospace;font-size:0.6rem;color:var(--green);text-shadow:0 0 8px var(--green);margin-bottom:1rem;">★ NOW ON PLEX (${approved.length})</p>
     <div class="plex-grid">
       ${approved.map(r=>`
         <div class="plex-card">
-          ${r.poster
-            ? `<img src="${r.poster}" alt="${esc(r.title)}">`
-            : `<div class="card-no-poster" style="border-bottom:2px solid var(--green)">NO IMAGE</div>`}
+          ${r.poster?`<img src="${r.poster}" alt="${esc(r.title)}">`:`<div class="card-no-poster" style="border-bottom:2px solid var(--green)">NO IMAGE</div>`}
           <div class="on-plex-bar">✔ ON PLEX</div>
           <div class="plex-card-body">
             <div class="plex-card-title">${esc(r.title)}</div>
             ${r.season?`<div class="plex-card-sub">${esc(r.season)}</div>`:''}
-            <div class="plex-card-req">REQ BY ${esc(r.requester.toUpperCase())}</div>
+            ${r.admin_note?`<div style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--yellow);margin-top:4px;">"${esc(r.admin_note)}"</div>`:''}
+            <div class="plex-card-req">REQ BY ${esc((r.requested_by||'').toUpperCase())}</div>
           </div>
         </div>`).join('')}
     </div>`;
 }
 
-// ── ADMIN ───────────────────────────────────────────────
+function renderWatchlistTab() {
+  if (watchlist.length === 0) return `
+    <div class="empty" style="border-color:var(--pink);border-style:solid;">
+      <p style="color:var(--pink)">♥ WATCHLIST EMPTY</p>
+      <p style="margin-top:0.5rem;">HIT ♥ ON ANY MOVIE TO SAVE IT HERE</p>
+    </div>`;
+  return `
+    <p style="font-family:'Press Start 2P',monospace;font-size:0.6rem;color:var(--pink);text-shadow:0 0 8px var(--pink);margin-bottom:1rem;">♥ MY WATCHLIST (${watchlist.length})</p>
+    <div class="movie-grid">
+      ${watchlist.map(w=>`
+        <div class="movie-card">
+          ${w.poster?`<img class="card-poster" src="${w.poster}" alt="${esc(w.title)}" loading="lazy">`:`<div class="card-no-poster">NO POSTER</div>`}
+          <div class="${w.type==='series'?'badge-tv':'badge-film'}">${w.type==='series'?'TV':'FILM'}</div>
+          <div class="badge-year">${w.year||'?'}</div>
+          <div class="card-body">
+            <div class="card-title">${esc(w.title)}</div>
+            <div style="display:flex;gap:4px;margin-top:auto;">
+              <button class="pbtn pbtn-pink" style="flex:1;padding:6px 4px;font-size:0.4rem;"
+                onclick="requestFromWatchlist(${w.id})">REQUEST</button>
+              <button class="pbtn pbtn-ghost" style="padding:6px 8px;font-size:0.5rem;border-color:rgba(255,0,0,0.4);color:var(--red);"
+                onclick="removeFromWatchlist(${w.id})">✕</button>
+            </div>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+
+// ── ADMIN ──
 function renderAdmin() {
   const stats = getStats();
-  let filtered = requests.slice().reverse();
+  let filtered = [...requests];
   if (adminStatusFilter!=='all') filtered = filtered.filter(r=>r.status===adminStatusFilter);
   if (adminTypeFilter!=='all')   filtered = filtered.filter(r=>r.type===(adminTypeFilter==='series'?'series':'movie'));
-
   const sel = selectedReqId ? requests.find(r=>r.id===selectedReqId) : null;
 
   return `
   <div style="margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
     <p style="font-family:'Press Start 2P',monospace;font-size:0.65rem;color:var(--pink);text-shadow:0 0 8px var(--pink);">⚙ ADMIN PANEL</p>
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
-      <button class="pbtn pbtn-green" style="font-size:0.4rem;padding:5px 10px;" onclick="exportCSV()">📥 EXPORT CSV</button>
+      <button class="pbtn pbtn-green" style="font-size:0.4rem;padding:5px 10px;" onclick="exportCSV()">📥 CSV</button>
+      <button class="pbtn pbtn-ghost" style="font-size:0.4rem;padding:5px 10px;" onclick="showDiscordSettings()">🎮 DISCORD</button>
       <button class="pbtn pbtn-ghost" style="font-size:0.4rem;padding:5px 10px;" onclick="showEmailSettings()">✉ EMAIL</button>
       <button class="pbtn pbtn-ghost" style="font-size:0.45rem;padding:6px 10px;" onclick="adminLogout()">LOGOUT [×]</button>
     </div>
   </div>
 
-  <!-- Stats -->
   <div class="admin-stats">
-    <div class="admin-stat-card" style="border-color:rgba(0,255,255,0.4)">
-      <div class="label">TOTAL</div>
-      <div class="value" style="color:var(--cyan);text-shadow:0 0 8px var(--cyan)">${stats.total}</div>
-    </div>
-    <div class="admin-stat-card" style="border-color:rgba(255,255,0,0.4)">
-      <div class="label">PENDING</div>
-      <div class="value" style="color:var(--yellow);text-shadow:0 0 8px var(--yellow)">${stats.pending}</div>
-    </div>
-    <div class="admin-stat-card" style="border-color:rgba(57,255,20,0.4)">
-      <div class="label">APPROVED</div>
-      <div class="value" style="color:var(--green);text-shadow:0 0 8px var(--green)">${stats.approved}</div>
-    </div>
-    <div class="admin-stat-card" style="border-color:rgba(168,85,247,0.4)">
-      <div class="label">SOON</div>
-      <div class="value" style="color:var(--purple);text-shadow:0 0 8px var(--purple)">${stats.soon}</div>
-    </div>
-    <div class="admin-stat-card" style="border-color:rgba(255,0,0,0.4)">
-      <div class="label">DENIED</div>
-      <div class="value" style="color:var(--red);text-shadow:0 0 8px var(--red)">${stats.denied}</div>
-    </div>
+    <div class="admin-stat-card" style="border-color:rgba(0,255,255,0.4)"><div class="label">TOTAL</div><div class="value" style="color:var(--cyan)">${stats.total}</div></div>
+    <div class="admin-stat-card" style="border-color:rgba(255,255,0,0.4)"><div class="label">PENDING</div><div class="value" style="color:var(--yellow)">${stats.pending}</div></div>
+    <div class="admin-stat-card" style="border-color:rgba(57,255,20,0.4)"><div class="label">APPROVED</div><div class="value" style="color:var(--green)">${stats.approved}</div></div>
+    <div class="admin-stat-card" style="border-color:rgba(168,85,247,0.4)"><div class="label">SOON</div><div class="value" style="color:var(--purple)">${stats.soon}</div></div>
+    <div class="admin-stat-card" style="border-color:rgba(255,0,0,0.4)"><div class="label">DENIED</div><div class="value" style="color:var(--red)">${stats.denied}</div></div>
   </div>
 
   <div class="admin-layout">
-    <!-- LEFT: LIST -->
     <div>
       <div class="pcard" style="min-height:400px;">
         <div class="pcard-title">MISSION LOG</div>
         <div style="margin-top:0.5rem;">
-          <!-- Status filter -->
           <div class="filter-row">
             <span class="filter-label">STATUS:</span>
             ${['all','pending','approved','soon','denied'].map(s=>`
-              <button class="filter-btn ${adminStatusFilter===s?'active':''}"
-                onclick="setAdminStatusFilter('${s}')">
+              <button class="filter-btn ${adminStatusFilter===s?'active':''}" onclick="setAdminStatusFilter('${s}')">
                 ${s==='soon'?'★ SOON':s.toUpperCase()}
               </button>`).join('')}
           </div>
-          <!-- Type filter -->
           <div class="filter-row">
             <span class="filter-label">TYPE:</span>
             ${['all','movie','series'].map(t=>`
-              <button class="filter-btn ${adminTypeFilter===t?'active':''}"
-                onclick="setAdminTypeFilter('${t}')">
+              <button class="filter-btn ${adminTypeFilter===t?'active':''}" onclick="setAdminTypeFilter('${t}')">
                 ${t==='all'?'ALL':t==='movie'?'FILMS':'TV SHOWS'}
               </button>`).join('')}
           </div>
 
           ${filtered.length===0
             ? `<div style="text-align:center;padding:2rem;font-family:'Press Start 2P',monospace;font-size:0.55rem;color:var(--muted-fg)">NO RECORDS FOUND.</div>`
-            : `
-              <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;align-items:center;">
+            : `<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;align-items:center;">
                 <button class="pbtn pbtn-ghost" style="font-size:0.4rem;padding:4px 8px;" onclick="toggleSelectAll(${JSON.stringify(filtered.map(r=>r.id))})">
                   ${bulkSelected.size===filtered.length&&filtered.length>0?'DESELECT ALL':'SELECT ALL'}
                 </button>
                 ${bulkSelected.size>0?`
                   <span style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--cyan)">${bulkSelected.size} SELECTED</span>
-                  <button class="pbtn pbtn-green" style="font-size:0.4rem;padding:4px 8px;" onclick="bulkAction('approved')">✓ APPROVE ALL</button>
-                  <button class="pbtn pbtn-red" style="font-size:0.4rem;padding:4px 8px;" onclick="bulkAction('denied')">✕ DENY ALL</button>
-                  <button class="pbtn pbtn-ghost" style="font-size:0.4rem;padding:4px 8px;border-color:rgba(255,0,0,0.4);color:var(--red);" onclick="bulkAction('delete')">🗑 DELETE ALL</button>
+                  <button class="pbtn pbtn-green" style="font-size:0.4rem;padding:4px 8px;" onclick="bulkAction('approved')">✓ APPROVE</button>
+                  <button class="pbtn pbtn-red" style="font-size:0.4rem;padding:4px 8px;" onclick="bulkAction('denied')">✕ DENY</button>
+                  <button class="pbtn pbtn-ghost" style="font-size:0.4rem;padding:4px 8px;border-color:rgba(255,0,0,0.4);color:var(--red);" onclick="bulkAction('delete')">🗑 DELETE</button>
                 `:''}
               </div>
-              ${filtered.map(r=>`
-              <div class="req-row ${selectedReqId===r.id?'selected':''}" onclick="selectReq(${r.id})">
-                <input type="checkbox" style="flex-shrink:0;width:16px;height:16px;cursor:pointer;accent-color:var(--pink);"
-                  ${bulkSelected.has(r.id)?'checked':''}
-                  onclick="event.stopPropagation();toggleBulkSelect(${r.id})">
-                <div class="req-info">
-                  <div class="req-title-row">
-                    <span class="req-main-title">${esc(r.title)} (${r.year})</span>
-                    <span class="tbadge ${r.type==='series'?'tbadge-tv':'tbadge-movie'}">${r.type==='series'?'TV':'FILM'}</span>
-                    ${r.season?`<span class="season-badge">${esc(r.season.replace('Season ','S'))}</span>`:''}
-                    <span class="sbadge sbadge-${r.status==='soon'?'soon':r.status}">${r.status==='soon'?'★ SOON':r.status.toUpperCase()}</span>
+              ${filtered.map(r=>{
+                const history = requests.filter(x=>x.tmdb_id===r.tmdb_id&&x.tmdb_type===r.tmdb_type);
+                return `
+                <div class="req-row ${selectedReqId===r.id?'selected':''}" onclick="selectReq(${r.id})">
+                  <input type="checkbox" style="flex-shrink:0;width:16px;height:16px;cursor:pointer;accent-color:var(--pink);"
+                    ${bulkSelected.has(r.id)?'checked':''} onclick="event.stopPropagation();toggleBulkSelect(${r.id})">
+                  <div class="req-info">
+                    <div class="req-title-row">
+                      <span class="req-main-title">${esc(r.title)} (${r.year||'?'})</span>
+                      <span class="tbadge ${r.type==='series'?'tbadge-tv':'tbadge-movie'}">${r.type==='series'?'TV':'FILM'}</span>
+                      ${r.season?`<span class="season-badge">${esc(r.season.replace('Season ','S'))}</span>`:''}
+                      <span class="sbadge sbadge-${r.status==='soon'?'soon':r.status}">${r.status==='soon'?'★ SOON':r.status.toUpperCase()}</span>
+                      ${history.length>1?`<span style="font-family:'Press Start 2P',monospace;font-size:0.38rem;padding:2px 5px;border:1px solid var(--cyan);color:var(--cyan);">${history.length}x REQUESTED</span>`:''}
+                    </div>
+                    <div class="req-by">REQ BY: ${esc(r.requested_by)}</div>
+                    <div class="req-date">${new Date(r.created_at).toLocaleString()}</div>
+                    ${r.admin_note?`<div style="font-family:'Press Start 2P',monospace;font-size:0.38rem;color:var(--yellow);margin-top:3px;">NOTE: ${esc(r.admin_note)}</div>`:''}
                   </div>
-                  <div class="req-by">REQ BY: ${esc(r.requester)}</div>
-                  <div class="req-date">${r.createdAt}</div>
-                </div>
-                <div class="req-actions">
-                  ${r.status!=='approved'?`<button class="pbtn pbtn-green" style="font-size:0.4rem;padding:5px 8px;" onclick="event.stopPropagation();adminAction(${r.id},'approved')">APPROVE</button>`:''}
-                  ${r.status!=='soon'?`<button class="pbtn pbtn-purple" style="font-size:0.4rem;padding:5px 8px;" onclick="event.stopPropagation();adminAction(${r.id},'soon')">★ SOON</button>`:''}
-                  ${r.status!=='denied'?`<button class="pbtn pbtn-red" style="font-size:0.4rem;padding:5px 8px;" onclick="event.stopPropagation();adminAction(${r.id},'denied')">DENY</button>`:''}
-                </div>
-              </div>`).join('')}
-            `}
+                  <div class="req-actions">
+                    ${r.status!=='approved'?`<button class="pbtn pbtn-green" style="font-size:0.4rem;padding:5px 8px;" onclick="event.stopPropagation();adminAction(${r.id},'approved')">APPROVE</button>`:''}
+                    ${r.status!=='soon'?`<button class="pbtn pbtn-purple" style="font-size:0.4rem;padding:5px 8px;" onclick="event.stopPropagation();adminAction(${r.id},'soon')">★ SOON</button>`:''}
+                    ${r.status!=='denied'?`<button class="pbtn pbtn-red" style="font-size:0.4rem;padding:5px 8px;" onclick="event.stopPropagation();adminAction(${r.id},'denied')">DENY</button>`:''}
+                  </div>
+                </div>`;
+              }).join('')}`}
         </div>
       </div>
     </div>
 
-    <!-- RIGHT: DETAIL -->
     <div>
       ${sel ? `
         <div class="detail-panel">
@@ -885,12 +1007,33 @@ function renderAdmin() {
             <span class="tbadge ${sel.type==='series'?'tbadge-tv':'tbadge-movie'}">${sel.type==='series'?'TV':'FILM'}</span>
           </div>
           <p style="font-family:'Press Start 2P',monospace;font-size:0.7rem;color:#fff;margin-bottom:4px;">${esc(sel.title)}</p>
-          <p style="font-family:'Press Start 2P',monospace;font-size:0.5rem;color:var(--yellow);margin-bottom:0.75rem;">${sel.year}</p>
-          <div class="detail-field"><strong>PLAYER:</strong> ${esc(sel.requester)}</div>
+          <p style="font-family:'Press Start 2P',monospace;font-size:0.5rem;color:var(--yellow);margin-bottom:0.75rem;">${sel.year||'?'}</p>
+          <div class="detail-field"><strong>PLAYER:</strong> ${esc(sel.requested_by)}</div>
           <div class="detail-field"><strong>TYPE:</strong> ${sel.type==='series'?'TV SERIES':'FILM'}</div>
           ${sel.season?`<div class="detail-field"><strong>SEASON:</strong> ${esc(sel.season)}</div>`:''}
-          <div class="detail-field"><strong>REQUESTED:</strong> ${sel.createdAt}</div>
+          <div class="detail-field"><strong>REQUESTED:</strong> ${new Date(sel.created_at).toLocaleString()}</div>
           ${sel.note?`<div class="detail-note">"${esc(sel.note)}"</div>`:''}
+
+          <!-- Request History -->
+          ${(()=>{
+            const hist = requests.filter(x=>x.tmdb_id===sel.tmdb_id&&x.tmdb_type===sel.tmdb_type);
+            return hist.length>1?`
+              <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:2px solid var(--muted);">
+                <p style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--cyan);margin-bottom:6px;">REQUEST HISTORY (${hist.length}x)</p>
+                ${hist.map(h=>`<div style="font-family:'Press Start 2P',monospace;font-size:0.38rem;color:rgba(255,255,255,0.5);margin-bottom:3px;">
+                  ${esc(h.requested_by)} · ${new Date(h.created_at).toLocaleDateString()} · <span style="color:${h.status==='approved'?'var(--green)':h.status==='denied'?'var(--red)':'var(--yellow)'}">${h.status.toUpperCase()}</span>
+                </div>`).join('')}
+              </div>`:''
+          })()}
+
+          <!-- Admin Note -->
+          <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:2px solid var(--muted);">
+            <p style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--yellow);margin-bottom:6px;">NOTE TO USER:</p>
+            <input class="pinput" id="admin-note-input" value="${esc(sel.admin_note||'')}"
+              placeholder="E.G. ALREADY HAVE THIS..." style="font-size:0.5rem;margin-bottom:6px;">
+            <button class="pbtn pbtn-yellow" style="width:100%;font-size:0.4rem;padding:6px;" onclick="saveAdminNote(${sel.id})">SAVE NOTE</button>
+          </div>
+
           <div class="detail-actions">
             ${sel.status!=='approved'?`<button class="pbtn pbtn-green" onclick="adminAction(${sel.id},'approved')">APPROVE ✓</button>`:''}
             ${sel.status!=='soon'?`<button class="pbtn pbtn-purple" onclick="adminAction(${sel.id},'soon')">★ MARK COMING SOON</button>`:''}
@@ -909,33 +1052,123 @@ function renderAdmin() {
 }
 
 // ═══════════════════════════════════════
+// DETAIL MODAL
+// ═══════════════════════════════════════
+async function openDetailModal(movieId) {
+  const movie = movieCache[movieId];
+  if (!movie) return;
+  detailMovie = movie;
+  const modal = document.getElementById('detail-modal');
+  const inner = document.getElementById('detail-modal-inner');
+  modal.style.display = 'flex';
+  inner.innerHTML = `<div class="loading" style="padding:3rem">LOADING...</div>`;
+
+  try {
+    const d = await tmdbDetails(movie.id, movie.tmdbType);
+    const director = d.credits?.crew?.find(c=>c.job==='Director')?.name || '';
+    const cast = (d.credits?.cast||[]).slice(0,5).map(c=>c.name).join(', ');
+    const runtime = d.runtime ? `${d.runtime} min` : d.episode_run_time?.[0] ? `${d.episode_run_time[0]} min/ep` : '';
+    const genres = (d.genres||[]).map(g=>g.name).join(', ');
+    const dup = getDupStatus(movie);
+    const isTV = movie.type === 'series';
+    const inWL = isInWatchlist(movie);
+
+    inner.innerHTML = `
+      <div style="display:flex;gap:1.25rem;flex-wrap:wrap;">
+        ${movie.poster?`<img src="${movie.poster}" style="width:160px;flex-shrink:0;aspect-ratio:2/3;object-fit:cover;border:2px solid var(--muted);" alt="">`:''}
+        <div style="flex:1;min-width:0;">
+          <p style="font-family:'Press Start 2P',monospace;font-size:clamp(0.7rem,2vw,1rem);color:var(--yellow);margin-bottom:6px;">${esc(d.title||d.name||movie.title)}</p>
+          <p style="font-family:'Press Start 2P',monospace;font-size:0.5rem;color:var(--cyan);margin-bottom:1rem;">
+            ${movie.year}${runtime?' · '+runtime:''}${d.number_of_seasons?' · '+d.number_of_seasons+' SEASONS':''}
+            · ★ ${movie.rating}
+          </p>
+          ${genres?`<p style="font-size:0.7rem;color:rgba(255,255,255,0.6);margin-bottom:6px;">${genres}</p>`:''}
+          ${director?`<p style="font-size:0.7rem;color:rgba(255,255,255,0.6);margin-bottom:6px;">DIR: ${director}</p>`:''}
+          ${cast?`<p style="font-size:0.7rem;color:rgba(255,255,255,0.5);margin-bottom:1rem;">CAST: ${cast}</p>`:''}
+          <p style="font-size:0.78rem;line-height:1.7;color:rgba(255,255,255,0.75);margin-bottom:1.5rem;">${esc(d.overview||'No description.')}</p>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+            ${dup && !isTV
+              ? `<button class="pbtn pbtn-ghost" disabled style="flex:1;">${dup==='approved'?'ON PLEX ✓':'IN QUEUE...'}</button>`
+              : `<button class="pbtn pbtn-pink" style="flex:1;font-size:0.5rem;"
+                  onclick="${isTV?`closeDetailModal();openSeasonModal(${movie.id})`:`closeDetailModal();requestMovieById(${movie.id},null)`}">
+                  ${isTV?'SELECT SEASON ▶':'+ REQUEST'}
+                </button>`}
+            <button class="pbtn ${inWL?'pbtn-red':'pbtn-ghost'}" style="padding:10px 14px;font-size:0.6rem;"
+              onclick="${inWL?`removeFromWatchlist(${getWatchlistId(movie)});closeDetailModal();`:`addToWatchlist(${movie.id});closeDetailModal();`}">
+              ${inWL?'♥ SAVED':'♡ WATCHLIST'}
+            </button>
+            <button class="pbtn pbtn-ghost" style="padding:10px 14px;font-size:0.5rem;" onclick="closeDetailModal()">CLOSE</button>
+          </div>
+        </div>
+      </div>`;
+  } catch(e) {
+    inner.innerHTML = `<p style="color:var(--red);font-family:'Press Start 2P',monospace;font-size:0.5rem;">ERROR LOADING DETAILS</p>`;
+  }
+}
+
+function closeDetailModal() {
+  document.getElementById('detail-modal').style.display = 'none';
+  detailMovie = null;
+}
+
+// ═══════════════════════════════════════
 // ACTIONS
 // ═══════════════════════════════════════
+function updatePlayerName(val) {
+  playerName = val;
+  localStorage.setItem('cineplex_player', val);
+  if (val.toLowerCase() === 'admin') {
+    playerName = '';
+    localStorage.removeItem('cineplex_player');
+    openPinModal();
+  }
+}
+
 function submitName() {
   const val = document.getElementById('name-input')?.value?.trim();
   if (!val) return;
-  if (val.toLowerCase() === 'admin') {
-    playerName = '';
-    openPinModal();
-    return;
-  }
+  if (val.toLowerCase() === 'admin') { openPinModal(); return; }
   playerName = val;
+  localStorage.setItem('cineplex_player', val);
   startMusicOnInteraction();
-  loadTrending().then(()=>render());
-  render();
+  loadRequests().then(()=>{
+    loadWatchlist();
+    loadTrending().then(()=>render());
+    render();
+  });
 }
 
 function goHome() {
   if (isAdmin) { adminLogout(); return; }
   playerName = '';
+  localStorage.removeItem('cineplex_player');
   render();
 }
 
-function setTab(t) { activeTab = t; render(); }
+function setTab(t) {
+  activeTab = t;
+  if (t === 'watchlist') loadWatchlist().then(()=>render());
+  else render();
+}
+
 function setTypeFilter(t) {
   typeFilter = t;
   if (searchTerm) doSearch();
   else render();
+}
+
+function setGenreFilter(id) {
+  genreFilter = id;
+  trendingLoaded = false;
+  loadTrending().then(()=>render());
+  render();
+}
+
+function clearSearch() {
+  searchTerm = '';
+  searchQuery = '';
+  searchResults = [];
+  render();
 }
 
 async function doSearch() {
@@ -958,6 +1191,7 @@ async function doSearch() {
   render();
 }
 
+// ── SEASON MODAL ──
 function openSeasonModal(movieId) {
   const movie = movieCache[movieId];
   if (!movie) return;
@@ -977,14 +1211,11 @@ async function renderSeasonModal(movie) {
     const details = await tmdbDetails(movie.id, movie.tmdbType);
     totalSeasons = details.number_of_seasons || totalSeasons;
   } catch(e) {}
-
   const taken = getTakenSeasons(movie);
   const seasons = ['All Seasons'];
   if (totalSeasons && totalSeasons > 0 && totalSeasons <= 50) {
     for (let i=1;i<=totalSeasons;i++) seasons.push(`Season ${i}`);
   }
-  const hasTaken = taken.size > 0;
-
   inner.innerHTML = `
     <div class="modal-title-bar">SELECT SEASON</div>
     <div class="modal-movie-row">
@@ -995,20 +1226,18 @@ async function renderSeasonModal(movie) {
       </div>
     </div>
     <p class="season-hint">CHOOSE WHICH SEASON(S) TO REQUEST:</p>
-    ${hasTaken?`<p class="taken-note">● = ALREADY IN QUEUE / APPROVED</p>`:''}
+    ${taken.size>0?`<p class="taken-note">● = ALREADY IN QUEUE / APPROVED</p>`:''}
     <div class="season-grid">
       ${seasons.map(s=>{
         const isTaken = taken.has(s);
         const safeS = s.replace(/'/g,"\\'");
-        return `<button class="season-btn ${isTaken?'taken':''}"
-          ${isTaken?'disabled':''}
+        return `<button class="season-btn ${isTaken?'taken':''}" ${isTaken?'disabled':''}
           onclick="requestMovieById(${pendingMovie.id},'${safeS}')">
           ${s==='All Seasons'?'ALL':s.replace('Season ','S')}
         </button>`;
       }).join('')}
     </div>
-    <button class="pbtn pbtn-ghost" style="width:100%;padding:8px;" onclick="closeSeasonModal()">CANCEL [ESC]</button>
-  `;
+    <button class="pbtn pbtn-ghost" style="width:100%;padding:8px;" onclick="closeSeasonModal()">CANCEL [ESC]</button>`;
 }
 
 function closeSeasonModal(e) {
@@ -1024,44 +1253,75 @@ function requestMovieById(movieId, season) {
   _submitRequest(movie, season);
 }
 
-function requestMovie(movieJson, season) {
-  const movie = JSON.parse(movieJson);
-  _submitRequest(movie, season);
-}
-
-function _submitRequest(movie, season) {
+async function _submitRequest(movie, season) {
   playerName = document.getElementById('player-name-input')?.value?.trim() || playerName;
   note = document.getElementById('note-input')?.value?.trim() || note;
   if (!playerName.trim()) { showToast('PLAYER NAME REQUIRED', true); return; }
 
   const newReq = {
-    id: Date.now(),
-    mediaId: movie.id,
-    tmdbType: movie.tmdbType,
-    title: movie.title,
-    year: movie.year,
-    type: movie.type,
-    poster: movie.poster || null,
-    posterSm: movie.posterSm || null,
-    requester: playerName,
-    season: season || null,
-    note: note || '',
-    status: 'pending',
-    createdAt: new Date().toLocaleString(),
+    title: movie.title, year: movie.year, type: movie.type,
+    season: season || null, poster: movie.poster || null,
+    tmdb_id: String(movie.id), tmdb_type: movie.tmdbType,
+    requested_by: playerName, note: note || null, status: 'pending',
   };
-  requests.push(newReq);
-  saveRequests();
-  sendEmailNotification(newReq);
-  playCoinSound();
-  const label = season ? `${movie.title} — ${season}` : movie.title;
-  showToast(`"${label}" ADDED TO QUEUE!`);
-  document.getElementById('season-modal').style.display='none';
-  pendingMovie=null;
-  note='';
-  render();
+
+  try {
+    const saved = await addRequest(newReq);
+    if (saved && saved[0]) requests.unshift(saved[0]);
+    playCoinSound();
+    const label = season ? `${movie.title} — ${season}` : movie.title;
+    showToast(`"${label}" ADDED TO QUEUE!`);
+    sendDiscordNotification(newReq);
+    sendEmailNotification(newReq);
+    document.getElementById('season-modal').style.display='none';
+    pendingMovie=null;
+    note='';
+    render();
+  } catch(e) {
+    console.error('Submit error:', e);
+    showToast('ERROR SUBMITTING REQUEST', true);
+  }
 }
 
-// ── PIN ──────────────────────────────────────────────────
+// ── WATCHLIST ──
+async function addToWatchlist(movieId) {
+  const movie = movieCache[movieId];
+  if (!movie) return;
+  if (!playerName.trim()) { showToast('ENTER YOUR NAME FIRST', true); return; }
+  if (isInWatchlist(movie)) { showToast('ALREADY IN WATCHLIST', true); return; }
+  try {
+    const item = {
+      title: movie.title, year: movie.year, type: movie.type,
+      poster: movie.poster || null, tmdb_id: String(movie.id),
+      tmdb_type: movie.tmdbType, added_by: playerName,
+    };
+    const saved = await addWatchlistItem(item);
+    if (saved && saved[0]) watchlist.unshift(saved[0]);
+    showToast(`♥ "${movie.title}" SAVED TO WATCHLIST!`);
+    render();
+  } catch(e) { showToast('ERROR SAVING TO WATCHLIST', true); }
+}
+
+async function removeFromWatchlist(id) {
+  try {
+    await removeWatchlistItem(id);
+    watchlist = watchlist.filter(w=>w.id!==id);
+    showToast('REMOVED FROM WATCHLIST');
+    render();
+  } catch(e) { showToast('ERROR REMOVING', true); }
+}
+
+function requestFromWatchlist(watchlistId) {
+  const item = watchlist.find(w=>w.id===watchlistId);
+  if (!item) return;
+  const movie = { id: parseInt(item.tmdb_id), tmdbType: item.tmdb_type, type: item.type,
+    title: item.title, year: item.year, poster: item.poster, posterSm: item.poster };
+  movieCache[movie.id] = movie;
+  if (movie.type === 'series') openSeasonModal(movie.id);
+  else _submitRequest(movie, null);
+}
+
+// ── PIN ──
 function openPinModal() {
   pinBuffer=''; pinError=false;
   renderPinModal();
@@ -1087,8 +1347,7 @@ function renderPinModal() {
       ${['1','2','3','4','5','6','7','8','9','CLR','0','OK'].map(k=>`
         <div class="pin-key ${k==='OK'?'ok':k==='CLR'?'clr':''}" onclick="pinPress('${k}')">${k}</div>`).join('')}
     </div>
-    <button class="pbtn pbtn-ghost" style="width:100%;margin-top:0.5rem;font-size:0.45rem;padding:8px;" onclick="closePinModal()">CANCEL</button>
-  `;
+    <button class="pbtn pbtn-ghost" style="width:100%;margin-top:0.5rem;font-size:0.45rem;padding:8px;" onclick="closePinModal()">CANCEL</button>`;
 }
 
 function pinPress(k) {
@@ -1097,41 +1356,53 @@ function pinPress(k) {
     if (pinBuffer===ADMIN_PIN) {
       document.getElementById('pin-modal').style.display='none';
       isAdmin=true; playerName='ADMIN';
-      render();
-    } else {
-      pinError=true; pinBuffer=''; renderPinModal();
-    }
+      loadRequests().then(()=>render());
+    } else { pinError=true; pinBuffer=''; renderPinModal(); }
     return;
   }
   if (pinBuffer.length<8) { pinBuffer+=k; pinError=false; renderPinModal(); }
 }
 
-// ── ADMIN ACTIONS ────────────────────────────────────────
-function adminAction(id, status) {
-  const r = requests.find(r=>r.id===id);
-  if (!r) return;
-  r.status = status;
-  saveRequests();
-  const labels = {approved:'✓ APPROVED',denied:'✕ DENIED',soon:'★ COMING SOON',pending:'RESET TO PENDING'};
-  showToast(labels[status]||status.toUpperCase());
-  render();
+// ── ADMIN ACTIONS ──
+async function adminAction(id, status) {
+  try {
+    await updateRequest(id, { status });
+    const r = requests.find(r=>r.id===id);
+    if (r) r.status = status;
+    const labels = {approved:'✓ APPROVED',denied:'✕ DENIED',soon:'★ COMING SOON',pending:'RESET TO PENDING'};
+    showToast(labels[status]||status.toUpperCase());
+    render();
+  } catch(e) { showToast('ERROR UPDATING', true); }
 }
 
-function adminDelete(id) {
+async function saveAdminNote(id) {
+  const note = document.getElementById('admin-note-input')?.value?.trim() || '';
+  try {
+    await updateRequest(id, { admin_note: note });
+    const r = requests.find(r=>r.id===id);
+    if (r) r.admin_note = note;
+    showToast('NOTE SAVED!');
+    render();
+  } catch(e) { showToast('ERROR SAVING NOTE', true); }
+}
+
+async function adminDelete(id) {
   if (!confirm('DELETE RECORD? THIS CANNOT BE UNDONE.')) return;
-  requests = requests.filter(r=>r.id!==id);
-  if (selectedReqId===id) selectedReqId=null;
-  saveRequests();
-  showToast('RECORD DELETED', true);
-  render();
+  try {
+    await deleteRequestDb(id);
+    requests = requests.filter(r=>r.id!==id);
+    if (selectedReqId===id) selectedReqId=null;
+    showToast('RECORD DELETED', true);
+    render();
+  } catch(e) { showToast('ERROR DELETING', true); }
 }
 
 function selectReq(id) { selectedReqId = selectedReqId===id ? null : id; render(); }
-function setAdminStatusFilter(f) { adminStatusFilter=f; render(); }
-function setAdminTypeFilter(f) { adminTypeFilter=f; render(); }
+function setAdminStatusFilter(f) { adminStatusFilter=f; bulkSelected.clear(); render(); }
+function setAdminTypeFilter(f) { adminTypeFilter=f; bulkSelected.clear(); render(); }
 function adminLogout() { isAdmin=false; playerName=''; selectedReqId=null; bulkSelected.clear(); render(); }
 
-// ── BULK SELECT ──────────────────────────────────────────
+// ── BULK SELECT ──
 function toggleBulkSelect(id) {
   if (bulkSelected.has(id)) bulkSelected.delete(id);
   else bulkSelected.add(id);
@@ -1139,39 +1410,37 @@ function toggleBulkSelect(id) {
 }
 
 function toggleSelectAll(ids) {
-  if (bulkSelected.size === ids.length) {
-    bulkSelected.clear();
-  } else {
-    ids.forEach(id => bulkSelected.add(id));
-  }
+  if (bulkSelected.size === ids.length) bulkSelected.clear();
+  else ids.forEach(id => bulkSelected.add(id));
   render();
 }
 
-function bulkAction(action) {
+async function bulkAction(action) {
   if (bulkSelected.size === 0) return;
   if (action === 'delete') {
-    if (!confirm(`DELETE ${bulkSelected.size} RECORDS? THIS CANNOT BE UNDONE.`)) return;
+    if (!confirm(`DELETE ${bulkSelected.size} RECORDS?`)) return;
+    for (const id of bulkSelected) await deleteRequestDb(id);
     requests = requests.filter(r => !bulkSelected.has(r.id));
     bulkSelected.clear();
-    saveRequests();
-    showToast(`RECORDS DELETED`, true);
+    showToast('RECORDS DELETED', true);
   } else {
+    for (const id of bulkSelected) await updateRequest(id, { status: action });
     requests.forEach(r => { if (bulkSelected.has(r.id)) r.status = action; });
-    const label = action==='approved'?'✓ APPROVED':'✕ DENIED';
     bulkSelected.clear();
-    saveRequests();
-    showToast(`${label} — BULK UPDATE DONE`);
+    showToast(action==='approved'?'✓ BULK APPROVED':'✕ BULK DENIED');
   }
   render();
 }
 
-// ── CSV EXPORT ───────────────────────────────────────────
+// ── CSV EXPORT ──
 function exportCSV() {
-  const headers = ['ID','Title','Year','Type','Season','Requested By','Status','Note','Date'];
+  const headers = ['ID','Title','Year','Type','Season','Requested By','Status','Note','Admin Note','Date'];
   const rows = requests.map(r => [
     r.id, `"${(r.title||'').replace(/"/g,'""')}"`, r.year, r.type,
-    r.season||'', `"${(r.requester||'').replace(/"/g,'""')}"`,
-    r.status, `"${(r.note||'').replace(/"/g,'""')}"`, r.createdAt
+    r.season||'', `"${(r.requested_by||'').replace(/"/g,'""')}"`,
+    r.status, `"${(r.note||'').replace(/"/g,'""')}"`,
+    `"${(r.admin_note||'').replace(/"/g,'""')}"`,
+    new Date(r.created_at).toLocaleString()
   ]);
   const csv = [headers, ...rows].map(r=>r.join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
@@ -1182,18 +1451,64 @@ function exportCSV() {
   showToast('CSV EXPORTED!');
 }
 
-// ── EMAIL SETTINGS ───────────────────────────────────────
+// ── DISCORD ──
+function showDiscordSettings() {
+  document.getElementById('app').insertAdjacentHTML('afterbegin', `
+    <div id="discord-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem;">
+      <div style="background:var(--card);border:4px solid var(--purple);padding:1.5rem;max-width:480px;width:100%;">
+        <p style="font-family:'Press Start 2P',monospace;font-size:0.6rem;color:var(--purple);margin-bottom:1rem;">🎮 DISCORD WEBHOOK</p>
+        <p style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--muted-fg);margin-bottom:0.5rem;">WEBHOOK URL:</p>
+        <input class="pinput" id="discord-input" type="text" value="${discordWebhook}" placeholder="https://discord.com/api/webhooks/..." style="margin-bottom:0.5rem;text-transform:none;font-size:0.55rem;">
+        <p style="font-family:'Press Start 2P',monospace;font-size:0.38rem;color:rgba(0,255,255,0.35);margin-bottom:1rem;line-height:2;">
+          IN DISCORD: SERVER SETTINGS → INTEGRATIONS → WEBHOOKS → NEW WEBHOOK → COPY URL
+        </p>
+        <div style="display:flex;gap:0.5rem;">
+          <button class="pbtn pbtn-purple" style="flex:1;font-size:0.45rem;" onclick="saveDiscordSettings()">SAVE</button>
+          <button class="pbtn pbtn-ghost" style="flex:1;font-size:0.45rem;" onclick="document.getElementById('discord-modal').remove()">CANCEL</button>
+        </div>
+      </div>
+    </div>`);
+}
+
+function saveDiscordSettings() {
+  discordWebhook = document.getElementById('discord-input')?.value?.trim();
+  localStorage.setItem('cineplex_discord', discordWebhook);
+  document.getElementById('discord-modal')?.remove();
+  showToast(discordWebhook ? '🎮 DISCORD WEBHOOK SAVED!' : 'DISCORD NOTIFICATIONS OFF');
+}
+
+async function sendDiscordNotification(req) {
+  if (!discordWebhook) return;
+  try {
+    await fetch(discordWebhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        embeds: [{
+          title: `🎬 New Request: ${req.title} (${req.year||'?'})`,
+          color: 0xff00ff,
+          fields: [
+            { name: 'Type', value: req.type==='series'?'TV Series':'Film', inline: true },
+            { name: 'Requested By', value: req.requested_by, inline: true },
+            ...(req.season ? [{ name: 'Season', value: req.season, inline: true }] : []),
+            ...(req.note ? [{ name: 'Note', value: req.note }] : []),
+          ],
+          thumbnail: req.poster ? { url: req.poster } : undefined,
+          footer: { text: "Nate's Cineplex" },
+          timestamp: new Date().toISOString(),
+        }]
+      })
+    });
+  } catch(e) { console.error('Discord error:', e); }
+}
+
+// ── EMAIL ──
 function showEmailSettings() {
-  const current = adminEmailAddress;
   document.getElementById('app').insertAdjacentHTML('afterbegin', `
     <div id="email-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem;">
       <div style="background:var(--card);border:4px solid var(--cyan);padding:1.5rem;max-width:400px;width:100%;">
         <p style="font-family:'Press Start 2P',monospace;font-size:0.6rem;color:var(--cyan);margin-bottom:1rem;">✉ EMAIL NOTIFICATIONS</p>
-        <p style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--muted-fg);margin-bottom:0.5rem;">NOTIFY EMAIL ON NEW REQUEST:</p>
-        <input class="pinput" id="email-input" type="email" value="${current}" placeholder="YOUR@EMAIL.COM" style="margin-bottom:1rem;text-transform:none;">
-        <p style="font-family:'Press Start 2P',monospace;font-size:0.38rem;color:rgba(0,255,255,0.35);margin-bottom:1rem;line-height:2;">
-          USES MAILTO: — OPENS YOUR EMAIL CLIENT WITH A PRE-FILLED MESSAGE WHEN SOMEONE SUBMITS A REQUEST.
-        </p>
+        <input class="pinput" id="email-input" type="email" value="${adminEmailAddress}" placeholder="YOUR@EMAIL.COM" style="margin-bottom:1rem;text-transform:none;">
         <div style="display:flex;gap:0.5rem;">
           <button class="pbtn pbtn-cyan" style="flex:1;background:var(--cyan);color:var(--bg);font-size:0.45rem;" onclick="saveEmailSettings()">SAVE</button>
           <button class="pbtn pbtn-ghost" style="flex:1;font-size:0.45rem;" onclick="document.getElementById('email-modal').remove()">CANCEL</button>
@@ -1203,21 +1518,20 @@ function showEmailSettings() {
 }
 
 function saveEmailSettings() {
-  const val = document.getElementById('email-input')?.value?.trim();
-  adminEmailAddress = val;
-  localStorage.setItem('cineplex_email', val);
+  adminEmailAddress = document.getElementById('email-input')?.value?.trim();
+  localStorage.setItem('cineplex_email', adminEmailAddress);
   document.getElementById('email-modal')?.remove();
-  showToast(val ? 'EMAIL SAVED!' : 'EMAIL NOTIFICATIONS OFF');
+  showToast(adminEmailAddress ? 'EMAIL SAVED!' : 'EMAIL NOTIFICATIONS OFF');
 }
 
 function sendEmailNotification(req) {
   if (!adminEmailAddress) return;
   const subject = encodeURIComponent(`[Nate's Cineplex] New Request: ${req.title}`);
-  const body = encodeURIComponent(
-    `New request submitted!\n\nTitle: ${req.title} (${req.year})\nType: ${req.type}\n${req.season?'Season: '+req.season+'\n':''}Requested by: ${req.requester}\n${req.note?'Note: '+req.note+'\n':''}\nDate: ${req.createdAt}`
-  );
+  const body = encodeURIComponent(`New request!\n\nTitle: ${req.title} (${req.year||'?'})\nType: ${req.type}\n${req.season?'Season: '+req.season+'\n':''}By: ${req.requested_by}\n${req.note?'Note: '+req.note:''}`);
   window.open(`mailto:${adminEmailAddress}?subject=${subject}&body=${body}`);
 }
+
+// ── TOAST ──
 function showToast(msg, isError=false) {
   document.querySelectorAll('.toast').forEach(t=>t.remove());
   const t=document.createElement('div');
@@ -1293,10 +1607,11 @@ function playCoinSound() {
   });
 }
 
-// ── Keyboard: ESC closes modals, Enter on pin ──
+// ── Keyboard ──
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){
     document.getElementById('season-modal').style.display='none';
+    document.getElementById('detail-modal').style.display='none';
     closePinModal();
   }
   if(document.getElementById('pin-modal').style.display!=='none'){
@@ -1306,12 +1621,19 @@ document.addEventListener('keydown',e=>{
   }
 });
 
-// Start music on first interaction
 window.addEventListener('click',startMusicOnInteraction);
 window.addEventListener('keydown',startMusicOnInteraction);
 
 // ── BOOT ──
-render();
+if (playerName) {
+  Promise.all([loadRequests(), loadWatchlist()]).then(()=>{
+    loadTrending().then(()=>render());
+    render();
+  });
+} else {
+  render();
+}
+
 </script>
 </body>
 </html>
