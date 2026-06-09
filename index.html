@@ -406,7 +406,13 @@ footer{
       <div class="logo-sub">INSERT COIN TO REQUEST</div>
     </div>
     <div class="header-nav">
-      <button class="mute-btn" id="mute-btn" onclick="toggleMute()">♪ ON</button>
+      <div style="display:flex;align-items:center;gap:0.5rem;">
+        <button class="mute-btn" id="mute-btn" onclick="toggleMute()">♪ ON</button>
+        <input type="range" id="volume-slider" min="0" max="100" value="40"
+          oninput="setVolume(this.value)"
+          style="width:80px;height:4px;accent-color:var(--pink);cursor:pointer;"
+          title="Volume">
+      </div>
     </div>
   </header>
 
@@ -437,7 +443,7 @@ const TMDB_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIwOWE0N2FjNmUxMDA4ODY5YzZjY2U
 const TMDB = 'https://api.themoviedb.org/3';
 const IMG  = 'https://image.tmdb.org/t/p/w500';
 const IMG_SM = 'https://image.tmdb.org/t/p/w185';
-const ADMIN_PIN = '1984';
+const ADMIN_PIN = '5529';
 
 // ═══════════════════════════════════════
 // STATE
@@ -459,6 +465,10 @@ let pinError = false;
 let searchResults = [];
 let isLoading = false;
 let movieCache = {};
+let trendingResults = [];
+let trendingLoaded = false;
+let bulkSelected = new Set();
+let adminEmailAddress = localStorage.getItem('cineplex_email') || '';
 
 // ═══════════════════════════════════════
 // PERSISTENCE
@@ -506,6 +516,18 @@ async function tmdbSearch(q) {
 async function tmdbDetails(id, type) {
   const ep = type==='tv'?'tv':'movie';
   return tmdbFetch(`${TMDB}/${ep}/${id}?language=en-US`);
+}
+
+async function loadTrending() {
+  if (trendingLoaded) return;
+  try {
+    const data = await tmdbFetch(`${TMDB}/trending/all/week?language=en-US`);
+    trendingResults = (data.results||[])
+      .filter(m=>m.media_type!=='person')
+      .map(m=>mapResult({...m, _type: m.media_type==='tv'?'tv':'movie'}));
+    trendingResults.forEach(m=>{ movieCache[m.id]=m; });
+    trendingLoaded = true;
+  } catch(e) { console.error('Trending error:', e); }
 }
 
 function mapResult(m) {
@@ -648,9 +670,14 @@ function renderHome() {
 
 function renderRequestTab(statsBanner) {
   if (isLoading) return `<div class="loading">SEARCHING DB...</div>`;
-  if (!searchTerm) return `
-    ${statsBanner}
-    <div class="empty"><p>SEARCH FOR A MOVIE OR TV SHOW<br>TO GET STARTED</p></div>`;
+  if (!searchTerm) {
+    const trendingSection = trendingResults.length > 0 ? `
+      <p style="font-family:'Press Start 2P',monospace;font-size:0.55rem;color:var(--yellow);text-shadow:0 0 6px var(--yellow);margin-bottom:1rem;">🔥 TRENDING THIS WEEK</p>
+      <div class="movie-grid">
+        ${trendingResults.map(m => renderMovieCard(m)).join('')}
+      </div>` : `<div class="loading">LOADING TRENDING...</div>`;
+    return `${statsBanner}${trendingSection}`;
+  }
 
   if (searchResults.length === 0) return `
     ${statsBanner}
@@ -752,7 +779,11 @@ function renderAdmin() {
   return `
   <div style="margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
     <p style="font-family:'Press Start 2P',monospace;font-size:0.65rem;color:var(--pink);text-shadow:0 0 8px var(--pink);">⚙ ADMIN PANEL</p>
-    <button class="pbtn pbtn-ghost" style="font-size:0.45rem;padding:6px 10px;" onclick="adminLogout()">LOGOUT [×]</button>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <button class="pbtn pbtn-green" style="font-size:0.4rem;padding:5px 10px;" onclick="exportCSV()">📥 EXPORT CSV</button>
+      <button class="pbtn pbtn-ghost" style="font-size:0.4rem;padding:5px 10px;" onclick="showEmailSettings()">✉ EMAIL</button>
+      <button class="pbtn pbtn-ghost" style="font-size:0.45rem;padding:6px 10px;" onclick="adminLogout()">LOGOUT [×]</button>
+    </div>
   </div>
 
   <!-- Stats -->
@@ -806,8 +837,23 @@ function renderAdmin() {
 
           ${filtered.length===0
             ? `<div style="text-align:center;padding:2rem;font-family:'Press Start 2P',monospace;font-size:0.55rem;color:var(--muted-fg)">NO RECORDS FOUND.</div>`
-            : filtered.map(r=>`
+            : `
+              <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;align-items:center;">
+                <button class="pbtn pbtn-ghost" style="font-size:0.4rem;padding:4px 8px;" onclick="toggleSelectAll(${JSON.stringify(filtered.map(r=>r.id))})">
+                  ${bulkSelected.size===filtered.length&&filtered.length>0?'DESELECT ALL':'SELECT ALL'}
+                </button>
+                ${bulkSelected.size>0?`
+                  <span style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--cyan)">${bulkSelected.size} SELECTED</span>
+                  <button class="pbtn pbtn-green" style="font-size:0.4rem;padding:4px 8px;" onclick="bulkAction('approved')">✓ APPROVE ALL</button>
+                  <button class="pbtn pbtn-red" style="font-size:0.4rem;padding:4px 8px;" onclick="bulkAction('denied')">✕ DENY ALL</button>
+                  <button class="pbtn pbtn-ghost" style="font-size:0.4rem;padding:4px 8px;border-color:rgba(255,0,0,0.4);color:var(--red);" onclick="bulkAction('delete')">🗑 DELETE ALL</button>
+                `:''}
+              </div>
+              ${filtered.map(r=>`
               <div class="req-row ${selectedReqId===r.id?'selected':''}" onclick="selectReq(${r.id})">
+                <input type="checkbox" style="flex-shrink:0;width:16px;height:16px;cursor:pointer;accent-color:var(--pink);"
+                  ${bulkSelected.has(r.id)?'checked':''}
+                  onclick="event.stopPropagation();toggleBulkSelect(${r.id})">
                 <div class="req-info">
                   <div class="req-title-row">
                     <span class="req-main-title">${esc(r.title)} (${r.year})</span>
@@ -824,6 +870,7 @@ function renderAdmin() {
                   ${r.status!=='denied'?`<button class="pbtn pbtn-red" style="font-size:0.4rem;padding:5px 8px;" onclick="event.stopPropagation();adminAction(${r.id},'denied')">DENY</button>`:''}
                 </div>
               </div>`).join('')}
+            `}
         </div>
       </div>
     </div>
@@ -874,6 +921,7 @@ function submitName() {
   }
   playerName = val;
   startMusicOnInteraction();
+  loadTrending().then(()=>render());
   render();
 }
 
@@ -1003,6 +1051,7 @@ function _submitRequest(movie, season) {
   };
   requests.push(newReq);
   saveRequests();
+  sendEmailNotification(newReq);
   playCoinSound();
   const label = season ? `${movie.title} — ${season}` : movie.title;
   showToast(`"${label}" ADDED TO QUEUE!`);
@@ -1080,9 +1129,95 @@ function adminDelete(id) {
 function selectReq(id) { selectedReqId = selectedReqId===id ? null : id; render(); }
 function setAdminStatusFilter(f) { adminStatusFilter=f; render(); }
 function setAdminTypeFilter(f) { adminTypeFilter=f; render(); }
-function adminLogout() { isAdmin=false; playerName=''; selectedReqId=null; render(); }
+function adminLogout() { isAdmin=false; playerName=''; selectedReqId=null; bulkSelected.clear(); render(); }
 
-// ── TOAST ────────────────────────────────────────────────
+// ── BULK SELECT ──────────────────────────────────────────
+function toggleBulkSelect(id) {
+  if (bulkSelected.has(id)) bulkSelected.delete(id);
+  else bulkSelected.add(id);
+  render();
+}
+
+function toggleSelectAll(ids) {
+  if (bulkSelected.size === ids.length) {
+    bulkSelected.clear();
+  } else {
+    ids.forEach(id => bulkSelected.add(id));
+  }
+  render();
+}
+
+function bulkAction(action) {
+  if (bulkSelected.size === 0) return;
+  if (action === 'delete') {
+    if (!confirm(`DELETE ${bulkSelected.size} RECORDS? THIS CANNOT BE UNDONE.`)) return;
+    requests = requests.filter(r => !bulkSelected.has(r.id));
+    bulkSelected.clear();
+    saveRequests();
+    showToast(`RECORDS DELETED`, true);
+  } else {
+    requests.forEach(r => { if (bulkSelected.has(r.id)) r.status = action; });
+    const label = action==='approved'?'✓ APPROVED':'✕ DENIED';
+    bulkSelected.clear();
+    saveRequests();
+    showToast(`${label} — BULK UPDATE DONE`);
+  }
+  render();
+}
+
+// ── CSV EXPORT ───────────────────────────────────────────
+function exportCSV() {
+  const headers = ['ID','Title','Year','Type','Season','Requested By','Status','Note','Date'];
+  const rows = requests.map(r => [
+    r.id, `"${(r.title||'').replace(/"/g,'""')}"`, r.year, r.type,
+    r.season||'', `"${(r.requester||'').replace(/"/g,'""')}"`,
+    r.status, `"${(r.note||'').replace(/"/g,'""')}"`, r.createdAt
+  ]);
+  const csv = [headers, ...rows].map(r=>r.join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=url; a.download='nates-cineplex-requests.csv';
+  a.click(); URL.revokeObjectURL(url);
+  showToast('CSV EXPORTED!');
+}
+
+// ── EMAIL SETTINGS ───────────────────────────────────────
+function showEmailSettings() {
+  const current = adminEmailAddress;
+  document.getElementById('app').insertAdjacentHTML('afterbegin', `
+    <div id="email-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem;">
+      <div style="background:var(--card);border:4px solid var(--cyan);padding:1.5rem;max-width:400px;width:100%;">
+        <p style="font-family:'Press Start 2P',monospace;font-size:0.6rem;color:var(--cyan);margin-bottom:1rem;">✉ EMAIL NOTIFICATIONS</p>
+        <p style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--muted-fg);margin-bottom:0.5rem;">NOTIFY EMAIL ON NEW REQUEST:</p>
+        <input class="pinput" id="email-input" type="email" value="${current}" placeholder="YOUR@EMAIL.COM" style="margin-bottom:1rem;text-transform:none;">
+        <p style="font-family:'Press Start 2P',monospace;font-size:0.38rem;color:rgba(0,255,255,0.35);margin-bottom:1rem;line-height:2;">
+          USES MAILTO: — OPENS YOUR EMAIL CLIENT WITH A PRE-FILLED MESSAGE WHEN SOMEONE SUBMITS A REQUEST.
+        </p>
+        <div style="display:flex;gap:0.5rem;">
+          <button class="pbtn pbtn-cyan" style="flex:1;background:var(--cyan);color:var(--bg);font-size:0.45rem;" onclick="saveEmailSettings()">SAVE</button>
+          <button class="pbtn pbtn-ghost" style="flex:1;font-size:0.45rem;" onclick="document.getElementById('email-modal').remove()">CANCEL</button>
+        </div>
+      </div>
+    </div>`);
+}
+
+function saveEmailSettings() {
+  const val = document.getElementById('email-input')?.value?.trim();
+  adminEmailAddress = val;
+  localStorage.setItem('cineplex_email', val);
+  document.getElementById('email-modal')?.remove();
+  showToast(val ? 'EMAIL SAVED!' : 'EMAIL NOTIFICATIONS OFF');
+}
+
+function sendEmailNotification(req) {
+  if (!adminEmailAddress) return;
+  const subject = encodeURIComponent(`[Nate's Cineplex] New Request: ${req.title}`);
+  const body = encodeURIComponent(
+    `New request submitted!\n\nTitle: ${req.title} (${req.year})\nType: ${req.type}\n${req.season?'Season: '+req.season+'\n':''}Requested by: ${req.requester}\n${req.note?'Note: '+req.note+'\n':''}\nDate: ${req.createdAt}`
+  );
+  window.open(`mailto:${adminEmailAddress}?subject=${subject}&body=${body}`);
+}
 function showToast(msg, isError=false) {
   document.querySelectorAll('.toast').forEach(t=>t.remove());
   const t=document.createElement('div');
@@ -1098,207 +1233,63 @@ function esc(s){
 }
 
 // ═══════════════════════════════════════
-// 80s SYNTHWAVE AUDIO ENGINE
+// MP3 AUDIO PLAYER
 // ═══════════════════════════════════════
-let audioCtx=null,masterGain=null,musicScheduler=null,musicPlaying=false,muted=false;
-let nextNoteTime=0,beatIndex=0,arpIndex=0,bassIndex=0,drumStep=0;
+let bgMusic = null;
+let muted = false;
+let currentVolume = 0.4;
 
-// ── SYNTHETIC NIGHTS inspired arrangement ──
-// Dark Am minor, throbbing bass, cold arpeggios, heavy kick
-const NOTE={
-  A1:55.00, E2:82.41, A2:110.0, C3:130.81, D3:146.83, E3:164.81,
-  F3:174.61, G3:196.0, A3:220.0, B3:246.94, C4:261.63, D4:293.66,
-  E4:329.63, F4:349.23, G4:392.0, A4:440.0, Bb4:466.16, B4:493.88,
-  C5:523.25, D5:587.33, E5:659.25, F5:698.46, G5:783.99, A5:880.0,
-  Cs4:277.18, Fs4:369.99, Gs4:415.30,
-  Cs5:554.37, Gs5:830.61, _:0
-};
-
-// Lead — cold, sparse, haunting minor melody (Am / F / C / G feel)
-const MELODY=[
-  ['A4',1.0],['_',0.5],['C5',0.5],
-  ['E5',1.0],['D5',0.5],['C5',0.5],
-  ['A4',2.0],
-  ['_',0.5],['G4',0.5],['A4',0.5],['C5',0.5],
-  ['F4',1.0],['_',0.5],['G4',0.5],
-  ['A4',1.0],['C5',0.5],['A4',0.5],
-  ['G4',2.0],
-  ['_',1.0],['E4',0.5],['F4',0.5],
-  ['A4',1.0],['_',0.5],['C5',0.5],
-  ['E5',1.5],['D5',0.5],
-  ['C5',1.0],['B4',0.5],['A4',0.5],
-  ['A4',3.0],['_',1.0],
-];
-
-// Arpeggio — fast cold 16th note pulse under the melody
-const ARPEGGIO=[
-  ['A3',0.25],['E4',0.25],['A4',0.25],['E4',0.25],
-  ['A3',0.25],['E4',0.25],['C5',0.25],['E4',0.25],
-  ['F3',0.25],['C4',0.25],['F4',0.25],['C4',0.25],
-  ['F3',0.25],['C4',0.25],['A4',0.25],['C4',0.25],
-  ['C3',0.25],['G3',0.25],['C4',0.25],['G3',0.25],
-  ['C3',0.25],['G3',0.25],['E4',0.25],['G3',0.25],
-  ['G3',0.25],['D4',0.25],['G4',0.25],['D4',0.25],
-  ['G3',0.25],['D4',0.25],['B4',0.25],['D4',0.25],
-];
-
-// Bass — deep throbbing pulse, one note held per bar
-const BASS=[
-  ['A1',2.0],
-  ['A1',2.0],
-  ['F3',2.0],
-  ['F3',2.0],
-  ['C3',2.0],
-  ['C3',2.0],
-  ['G3',2.0],
-  ['G3',2.0],
-];
-
-// Drums — Perturbator style: four-on-floor kick, snare 2&4, 8th hihats
-const KICK  =[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0];
-const SNARE =[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0];
-const HIHAT =[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0];
-const BPS=6.0; // slower = darker, more cinematic
-
-function getCtx(){
-  if(!audioCtx){
-    audioCtx=new(window.AudioContext||window.webkitAudioContext)();
-    masterGain=audioCtx.createGain();
-    masterGain.gain.value=muted?0:0.13;
-    masterGain.connect(audioCtx.destination);
-  }
-  return audioCtx;
+function initMusic() {
+  if (bgMusic) return;
+  bgMusic = new Audio('Orchestraman_-_80s.mp3');
+  bgMusic.loop = true;
+  bgMusic.volume = currentVolume;
 }
 
-function playNote(freq,t,dur,type,gain,atk=0.005,rel=0.06,detune=0){
-  if(!audioCtx||!masterGain||!freq||freq===0||!isFinite(freq))return;
-  const o=audioCtx.createOscillator(),g=audioCtx.createGain();
-  o.type=type;o.frequency.value=freq;
-  if(detune)o.detune.value=detune;
-  g.gain.setValueAtTime(0,t);
-  g.gain.linearRampToValueAtTime(gain,t+atk);
-  g.gain.setValueAtTime(gain,t+dur-rel);
-  g.gain.linearRampToValueAtTime(0,t+dur);
-  o.connect(g);g.connect(masterGain);o.start(t);o.stop(t+dur+0.01);
+function startMusic() {
+  initMusic();
+  if (!muted) bgMusic.play().catch(()=>{});
 }
 
-function playKick(t){
-  if(!audioCtx||!masterGain||!isFinite(t))return;
-  const o=audioCtx.createOscillator(),g=audioCtx.createGain();
-  o.type='sine';o.frequency.setValueAtTime(180,t);
-  o.frequency.exponentialRampToValueAtTime(30,t+0.18);
-  g.gain.setValueAtTime(0.7,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.22);
-  o.connect(g);g.connect(masterGain);o.start(t);o.stop(t+0.23);
+function stopMusic() {
+  if (bgMusic) bgMusic.pause();
 }
 
-function playSnare(t){
-  if(!audioCtx||!masterGain||!isFinite(t))return;
-  const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*0.1,audioCtx.sampleRate);
-  const d=buf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
-  const s=audioCtx.createBufferSource(),g=audioCtx.createGain();
-  s.buffer=buf;g.gain.setValueAtTime(0.2,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.1);
-  s.connect(g);g.connect(masterGain);s.start(t);s.stop(t+0.11);
-}
-
-function playHihat(t){
-  if(!audioCtx||!masterGain||!isFinite(t))return;
-  const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*0.03,audioCtx.sampleRate);
-  const d=buf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
-  const s=audioCtx.createBufferSource(),f=audioCtx.createBiquadFilter(),g=audioCtx.createGain();
-  s.buffer=buf;f.type='highpass';f.frequency.value=8000;
-  g.gain.setValueAtTime(0.07,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.03);
-  s.connect(f);f.connect(g);g.connect(masterGain);s.start(t);s.stop(t+0.04);
-}
-
-function scheduleMelody(){
-  if(!musicPlaying)return;
-  const ac=getCtx();
-  while(nextNoteTime<ac.currentTime+0.25){
-    const ms=MELODY[beatIndex%MELODY.length];
-    const as=ARPEGGIO[arpIndex%ARPEGGIO.length];
-    const bd=ms[1]/BPS,ad=as[1]/BPS;
-    const mFreq=NOTE[ms[0]]||0;
-    const aFreq=NOTE[as[0]]||0;
-
-    // Lead — cold sawtooth, long slow attack, slight detune for chorus width
-    if(mFreq>0){
-      playNote(mFreq,nextNoteTime,bd*0.9,'sawtooth',0.22,0.04,0.15);
-      playNote(mFreq,nextNoteTime,bd*0.9,'sawtooth',0.08,0.04,0.15,-12);
-      // Ghost echo — quieter, slightly delayed
-      playNote(mFreq,nextNoteTime+0.07,bd*0.7,'triangle',0.06,0.02,0.12);
-    }
-
-    // Arpeggio — square wave, crisp and cold
-    if(aFreq>0) playNote(aFreq,nextNoteTime,ad*0.6,'square',0.09,0.002,0.03);
-
-    // Bass — deep sub sawtooth, one per 2 full beats
-    if(beatIndex%8===0){
-      const bs=BASS[bassIndex%BASS.length];
-      const bFreq=NOTE[bs[0]]||0;
-      if(bFreq>0){
-        // Sub bass sine layer
-        playNote(bFreq,nextNoteTime,(bs[1]*2)/BPS*0.95,'sine',0.35,0.02,0.2);
-        // Gritty sawtooth on top
-        playNote(bFreq*2,nextNoteTime,(bs[1]*2)/BPS*0.8,'sawtooth',0.1,0.02,0.15);
-        bassIndex++;
-      }
-    }
-
-    const di=drumStep%KICK.length;
-    if(KICK[di])playKick(nextNoteTime);
-    if(SNARE[di])playSnare(nextNoteTime);
-    if(HIHAT[di])playHihat(nextNoteTime);
-    nextNoteTime+=bd;beatIndex++;arpIndex++;drumStep++;
-    if(beatIndex>=MELODY.length)beatIndex=0;
-    if(arpIndex>=ARPEGGIO.length)arpIndex=0;
-  }
-  musicScheduler=setTimeout(scheduleMelody,100);
-}
-
-function startMusic(){
-  if(musicPlaying)return;
-  const ac=getCtx();
-  if(ac.state==='suspended')ac.resume();
-  musicPlaying=true;
-  nextNoteTime=ac.currentTime+0.05;
-  beatIndex=0;arpIndex=0;bassIndex=0;drumStep=0;
-  scheduleMelody();
-}
-
-function stopMusic(){
-  musicPlaying=false;
-  if(musicScheduler){clearTimeout(musicScheduler);musicScheduler=null;}
-}
-
-function startMusicOnInteraction(){
+function startMusicOnInteraction() {
   startMusic();
-  window.removeEventListener('click',startMusicOnInteraction);
-  window.removeEventListener('keydown',startMusicOnInteraction);
+  window.removeEventListener('click', startMusicOnInteraction);
+  window.removeEventListener('keydown', startMusicOnInteraction);
 }
 
-function toggleMute(){
-  muted=!muted;
-  if(audioCtx&&masterGain) masterGain.gain.setTargetAtTime(muted?0:0.13,getCtx().currentTime,0.05);
-  document.getElementById('mute-btn').textContent=muted?'♪ OFF':'♪ ON';
-  if(!muted&&!musicPlaying) startMusic();
+function toggleMute() {
+  muted = !muted;
+  if (bgMusic) bgMusic.volume = muted ? 0 : currentVolume;
+  document.getElementById('mute-btn').textContent = muted ? '♪ OFF' : '♪ ON';
+  if (!muted) startMusic();
 }
 
-function playCoinSound(){
-  const ac=getCtx();
-  if(ac.state==='suspended')ac.resume();
-  const now=ac.currentTime;
+function setVolume(val) {
+  currentVolume = val / 100;
+  muted = false;
+  if (bgMusic) bgMusic.volume = currentVolume;
+  document.getElementById('mute-btn').textContent = '♪ ON';
+}
+
+function playCoinSound() {
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const now = ac.currentTime;
   [{freq:800,t:0.00,dur:0.06,type:'square',gain:0.5},
    {freq:1200,t:0.05,dur:0.06,type:'square',gain:0.5},
    {freq:1600,t:0.10,dur:0.10,type:'square',gain:0.6},
    {freq:2000,t:0.18,dur:0.15,type:'triangle',gain:0.4}]
   .forEach(s=>{
     const o=ac.createOscillator(),g=ac.createGain();
-    o.type=s.type;o.frequency.value=s.freq;
+    o.type=s.type; o.frequency.value=s.freq;
     g.gain.setValueAtTime(0,now+s.t);
     g.gain.linearRampToValueAtTime(s.gain,now+s.t+0.005);
     g.gain.exponentialRampToValueAtTime(0.001,now+s.t+s.dur);
-    o.connect(g);g.connect(ac.destination);
-    o.start(now+s.t);o.stop(now+s.t+s.dur+0.01);
+    o.connect(g); g.connect(ac.destination);
+    o.start(now+s.t); o.stop(now+s.t+s.dur+0.01);
   });
 }
 
