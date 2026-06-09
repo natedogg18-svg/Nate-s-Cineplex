@@ -433,6 +433,7 @@ footer{
 // CONFIG
 // ═══════════════════════════════════════
 const TMDB_KEY = '09a47ac6e1008869c6cce1c5a5508cf8';
+const TMDB_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIwOWE0N2FjNmUxMDA4ODY5YzZjY2UxYzVhNTUwOGNmOCIsIm5iZiI6MTc4MDk4ODA3My44MDQ5OTk4LCJzdWIiOiI2YTI3YjhhOWQwYzdmNjUwNDY5NTRkNTciLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.CT60rm8H86wGez_1dydxmkLVmx6fXb0gNUN7ladsvzk';
 const TMDB = 'https://api.themoviedb.org/3';
 const IMG  = 'https://image.tmdb.org/t/p/w500';
 const IMG_SM = 'https://image.tmdb.org/t/p/w185';
@@ -479,7 +480,10 @@ function getStats() {
 // ═══════════════════════════════════════
 async function tmdbFetch(url) {
   const sep = url.includes('?') ? '&' : '?';
-  const res = await fetch(`${url}${sep}api_key=${TMDB_KEY}`);
+  const fullUrl = `${url}${sep}api_key=${TMDB_KEY}`;
+  const res = await fetch(fullUrl, {
+    headers: { 'Authorization': `Bearer ${TMDB_TOKEN}`, 'Content-Type': 'application/json' }
+  });
   if (!res.ok) throw new Error(`TMDB ${res.status}`);
   return res.json();
 }
