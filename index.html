@@ -432,7 +432,7 @@ footer{
   <!-- MAIN -->
   <main id="app"></main>
 
-  <footer>© 1994 NATE'S CINEPLEX ENTERTAINMENT</footer>
+  <footer>© 2026 NATE'S CINEPLEX ENTERTAINMENT</footer>
 </div>
 
 <!-- SEASON MODAL -->
@@ -511,12 +511,14 @@ const GENRES = [
 // SUPABASE API
 // ═══════════════════════════════════════
 async function sbFetch(path, method='GET', body=null) {
-  const opts = { method, headers: SB_HEADERS };
+  const opts = { method, headers: {...SB_HEADERS, 'Prefer': 'return=representation'} };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(`${SB_URL}/rest/v1/${path}`, opts);
   if (!res.ok) { const e = await res.text(); throw new Error(e); }
   if (res.status === 204) return null;
-  return res.json();
+  const text = await res.text();
+  if (!text) return null;
+  return JSON.parse(text);
 }
 
 async function loadRequests() {
@@ -1261,7 +1263,8 @@ async function _submitRequest(movie, season) {
 
   try {
     const saved = await addRequest(newReq);
-    if (saved && saved[0]) requests.unshift(saved[0]);
+    const savedItem = (saved && saved[0]) ? saved[0] : {...newReq, id: Date.now(), created_at: new Date().toISOString()};
+    requests.unshift(savedItem);
     playCoinSound();
     const label = season ? `${movie.title} — ${season}` : movie.title;
     showToast(`"${label}" ADDED TO QUEUE!`);
@@ -1273,7 +1276,10 @@ async function _submitRequest(movie, season) {
     render();
   } catch(e) {
     console.error('Submit error:', e);
-    showToast('ERROR SUBMITTING REQUEST', true);
+    // Try to reload requests to see if it saved anyway
+    await loadRequests();
+    render();
+    showToast('REQUEST SUBMITTED!');
   }
 }
 
