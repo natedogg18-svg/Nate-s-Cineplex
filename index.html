@@ -7,7 +7,6 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23050614'/><text y='24' font-size='24' x='4'>🎬</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-<style>
 *{margin:0;padding:0;box-sizing:border-box;}
 
 :root{
@@ -399,6 +398,12 @@ footer{
 /* ── WATCHLIST TAB ── */
 .tab.active-yellow{background:var(--yellow);color:var(--bg);box-shadow:0 0 12px var(--yellow);}
 
+/* ── CONFETTI ── */
+@keyframes confettiFall{
+  0%{transform:translateY(0) rotate(0deg);opacity:1;}
+  100%{transform:translateY(100vh) rotate(720deg);opacity:0;}
+}
+
 /* ── DETAIL MODAL ── */
 .detail-modal-box{
   background:var(--card);border:4px solid var(--pink);
@@ -499,6 +504,11 @@ let trendingLoaded = false;
 let bulkSelected = new Set();
 let adminEmailAddress = localStorage.getItem('cineplex_email') || '';
 let discordWebhook = localStorage.getItem('cineplex_discord') || '';
+let plexToken = localStorage.getItem('cineplex_plex_token') || 'Spio8f3MBdTQEghVYsst';
+let plexUrl = localStorage.getItem('cineplex_plex_url') || 'http://174.52.162.247:24248';
+let plexLibrary = [];
+let plexLoaded = false;
+let trendingSort = 'popular'; // 'popular' | 'rating' | 'newest'
 
 const GENRES = [
   {id:0,name:'All'},{id:28,name:'Action'},{id:12,name:'Adventure'},
@@ -735,7 +745,7 @@ function renderHome() {
         <label class="field-label" style="color:var(--pink)">SEARCH DATABASE:</label>
         <div class="search-row">
           <input class="pinput" id="search-input" value="${esc(searchQuery)}"
-            onkeydown="if(event.key==='Enter')doSearch()" placeholder="TITLE...">
+            onkeydown="if(event.key==='Enter')doSearch()" placeholder="TITLE OR ACTOR/DIRECTOR...">
           <button class="pbtn pbtn-pink" onclick="doSearch()">SEARCH</button>
           ${searchTerm?`<button class="pbtn pbtn-ghost" onclick="clearSearch()">✕</button>`:''}
         </div>
@@ -770,22 +780,30 @@ function renderRequestTab(statsBanner) {
   if (isLoading) return `<div class="loading">SEARCHING DB...</div>`;
 
   if (!searchTerm) {
-    // Genre filter bar
     const genreBar = `
-      <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:1.25rem;">
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.75rem;">
         ${GENRES.map(g=>`
           <button class="pbtn ${genreFilter===g.id?'pbtn-yellow':'pbtn-ghost'}"
             style="padding:4px 10px;font-size:0.45rem;"
             onclick="setGenreFilter(${g.id})">${g.name}</button>`).join('')}
       </div>`;
 
+    const sortBar = `
+      <div style="display:flex;gap:0.4rem;align-items:center;margin-bottom:1.25rem;flex-wrap:wrap;">
+        <span style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--muted-fg);">SORT:</span>
+        ${[['popular','🔥 POPULAR'],['rating','⭐ RATING'],['newest','📅 NEWEST']].map(([v,l])=>`
+          <button class="pbtn ${trendingSort===v?'pbtn-cyan':'pbtn-ghost'}"
+            style="padding:4px 10px;font-size:0.4rem;"
+            onclick="setTrendingSort('${v}')">${l}</button>`).join('')}
+      </div>`;
+
     const trendingSection = trendingResults.length > 0 ? `
-      ${genreBar}
+      ${genreBar}${sortBar}
       <p style="font-family:'Press Start 2P',monospace;font-size:0.55rem;color:var(--yellow);text-shadow:0 0 6px var(--yellow);margin-bottom:1rem;">
         🔥 ${genreFilter?GENRES.find(g=>g.id===genreFilter)?.name+' PICKS':'TRENDING THIS WEEK'}
       </p>
-      <div class="movie-grid">${trendingResults.map(m => renderMovieCard(m)).join('')}</div>`
-      : `${genreBar}<div class="loading">LOADING TRENDING...</div>`;
+      <div class="movie-grid">${getSortedTrending().map(m => renderMovieCard(m)).join('')}</div>`
+      : `${genreBar}${sortBar}<div class="loading">LOADING TRENDING...</div>`;
 
     return `${statsBanner}${trendingSection}`;
   }
@@ -823,6 +841,7 @@ function renderMovieCard(m) {
       </p>
     </div>` : '';
 
+  const isOnPlex = isApprovedOnPlex(m);
   movieCache[m.id] = m;
   return `
     <div class="movie-card ${isDisabled?'is-dup':''}">
@@ -832,6 +851,7 @@ function renderMovieCard(m) {
           : `<div class="card-no-poster">NO POSTER</div>`}
         <div class="${isTV?'badge-tv':'badge-film'}">${isTV?'TV':'FILM'}</div>
         <div class="badge-year">${m.year}</div>
+        ${isOnPlex?`<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(57,255,20,0.9);text-align:center;font-family:'Press Start 2P',monospace;font-size:0.4rem;color:#000;padding:3px;">✔ ON PLEX</div>`:''}
         ${dupOverlay}
       </div>
       <div class="card-body">
@@ -915,7 +935,7 @@ function renderAdmin() {
 
   return `
   <div style="margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
-    <p style="font-family:'Press Start 2P',monospace;font-size:0.65rem;color:var(--pink);text-shadow:0 0 8px var(--pink);">⚙ ADMIN PANEL</p>
+    <p style="font-family:'Press Start 2P',monospace;font-size:0.65rem;color:var(--pink);text-shadow:0 0 8px var(--pink);">⚙ ADMIN PANEL ${stats.pending>0?`<span style="background:var(--yellow);color:#000;font-size:0.5rem;padding:2px 6px;margin-left:8px;">${stats.pending} NEW</span>`:''}</p>
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
       <button class="pbtn pbtn-green" style="font-size:0.4rem;padding:5px 10px;" onclick="exportCSV()">📥 CSV</button>
       <button class="pbtn pbtn-ghost" style="font-size:0.4rem;padding:5px 10px;" onclick="showDiscordSettings()">🎮 DISCORD</button>
@@ -1129,6 +1149,7 @@ function submitName() {
   startMusicOnInteraction();
   loadRequests().then(()=>{
     loadWatchlist();
+    loadPlexLibrary();
     loadTrending().then(()=>render());
     render();
   });
@@ -1178,8 +1199,21 @@ async function doSearch() {
   activeTab = 'request';
   render();
   try {
-    const raw = await tmdbSearch(searchTerm);
-    searchResults = raw.map(mapResult);
+    // Check if it looks like a person search (starts with "actor:" or "director:" or we try person first)
+    const isPerson = searchTerm.toLowerCase().startsWith('actor:') || searchTerm.toLowerCase().startsWith('director:');
+    const cleanQuery = searchTerm.replace(/^(actor|director):\s*/i,'');
+
+    let raw = [];
+    if (isPerson) {
+      raw = await searchByPerson(cleanQuery);
+    } else {
+      raw = await tmdbSearch(searchTerm);
+      // If no results, try as person
+      if (raw.length === 0) {
+        raw = await searchByPerson(searchTerm);
+      }
+    }
+    searchResults = raw.map ? raw.map(m=>m.id?m:mapResult(m)) : [];
     movieCache = {};
     searchResults.forEach(m => { movieCache[m.id] = m; });
   } catch(e) { console.error('Search error:', e); searchResults = []; }
@@ -1266,6 +1300,7 @@ async function _submitRequest(movie, season) {
     const savedItem = (saved && saved[0]) ? saved[0] : {...newReq, id: Date.now(), created_at: new Date().toISOString()};
     requests.unshift(savedItem);
     playCoinSound();
+    launchConfetti();
     const label = season ? `${movie.title} — ${season}` : movie.title;
     showToast(`"${label}" ADDED TO QUEUE!`);
     sendDiscordNotification(newReq);
@@ -1531,7 +1566,96 @@ function sendEmailNotification(req) {
   window.open(`mailto:${adminEmailAddress}?subject=${subject}&body=${body}`);
 }
 
-// ── TOAST ──
+// ── SORT TRENDING ──
+function getSortedTrending() {
+  const sorted = [...trendingResults];
+  if (trendingSort === 'rating') sorted.sort((a,b)=>parseFloat(b.rating||0)-parseFloat(a.rating||0));
+  else if (trendingSort === 'newest') sorted.sort((a,b)=>(b.year||0)-(a.year||0));
+  return sorted;
+}
+
+function setTrendingSort(s) { trendingSort=s; render(); }
+
+// ── PLEX CHECK ──
+async function loadPlexLibrary() {
+  if (plexLoaded || !plexToken || !plexUrl) return;
+  try {
+    const res = await fetch(`${plexUrl}/library/sections?X-Plex-Token=${plexToken}`, {
+      headers: { 'Accept': 'application/json' }
+    });
+    const data = await res.json();
+    const sections = data.MediaContainer?.Directory || [];
+    const allTitles = [];
+    for (const section of sections) {
+      if (section.type === 'movie' || section.type === 'show') {
+        const r = await fetch(`${plexUrl}/library/sections/${section.key}/all?X-Plex-Token=${plexToken}&X-Plex-Container-Size=1000`, {
+          headers: { 'Accept': 'application/json' }
+        });
+        const d = await r.json();
+        const items = d.MediaContainer?.Metadata || [];
+        items.forEach(m => allTitles.push(m.title?.toLowerCase()));
+      }
+    }
+    plexLibrary = allTitles;
+    plexLoaded = true;
+    render();
+  } catch(e) { console.error('Plex library error:', e); }
+}
+
+function isApprovedOnPlex(movie) {
+  // Check real Plex library first
+  if (plexLoaded && plexLibrary.length > 0) {
+    return plexLibrary.includes(movie.title?.toLowerCase());
+  }
+  // Fall back to approved requests
+  return requests.some(r=>
+    r.tmdb_id===String(movie.id) &&
+    r.tmdb_type===movie.tmdbType &&
+    r.status==='approved'
+  );
+}
+
+// ── PERSON SEARCH ──
+async function searchByPerson(name) {
+  const res = await tmdbFetch(`${TMDB}/search/person?query=${encodeURIComponent(name)}&language=en-US&page=1`);
+  const person = (res.results||[])[0];
+  if (!person) return [];
+  const credits = await tmdbFetch(`${TMDB}/person/${person.id}/combined_credits?language=en-US`);
+  return (credits.cast||[])
+    .filter(m=>m.media_type!=='person'&&m.poster_path)
+    .sort((a,b)=>(b.popularity||0)-(a.popularity||0))
+    .slice(0,18)
+    .map(m=>mapResult({...m, _type:m.media_type==='tv'?'tv':'movie'}));
+}
+
+// ── CONFETTI ──
+function launchConfetti() {
+  const colors = ['#ff00ff','#00ffff','#ffff00','#39ff14','#ff0000','#a855f7'];
+  for (let i=0; i<80; i++) {
+    const el = document.createElement('div');
+    el.style.cssText = `
+      position:fixed;pointer-events:none;z-index:99999;
+      width:${4+Math.random()*6}px;height:${4+Math.random()*6}px;
+      background:${colors[Math.floor(Math.random()*colors.length)]};
+      left:${Math.random()*100}vw;top:-10px;
+      border-radius:${Math.random()>0.5?'50%':'0'};
+      animation:confettiFall ${1+Math.random()*2}s ease-in forwards;
+      animation-delay:${Math.random()*0.5}s;
+    `;
+    document.body.appendChild(el);
+    setTimeout(()=>el.remove(), 3000);
+  }
+}
+
+// ── VOLUME PERSISTENCE ──
+function loadSavedVolume() {
+  const saved = localStorage.getItem('cineplex_volume');
+  if (saved !== null) {
+    currentVolume = parseFloat(saved);
+    const slider = document.getElementById('volume-slider');
+    if (slider) slider.value = Math.round(currentVolume * 100);
+  }
+}
 function showToast(msg, isError=false) {
   document.querySelectorAll('.toast').forEach(t=>t.remove());
   const t=document.createElement('div');
@@ -1587,6 +1711,7 @@ function setVolume(val) {
   muted = false;
   if (bgMusic) bgMusic.volume = currentVolume;
   document.getElementById('mute-btn').textContent = '♪ ON';
+  localStorage.setItem('cineplex_volume', currentVolume);
 }
 
 function playCoinSound() {
@@ -1625,8 +1750,10 @@ window.addEventListener('click',startMusicOnInteraction);
 window.addEventListener('keydown',startMusicOnInteraction);
 
 // ── BOOT ──
+loadSavedVolume();
 if (playerName) {
   Promise.all([loadRequests(), loadWatchlist()]).then(()=>{
+    loadPlexLibrary();
     loadTrending().then(()=>render());
     render();
   });
