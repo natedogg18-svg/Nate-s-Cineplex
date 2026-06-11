@@ -397,6 +397,7 @@ footer{
 }
 /* ── WATCHLIST TAB ── */
 .tab.active-yellow{background:var(--yellow);color:var(--bg);box-shadow:0 0 12px var(--yellow);}
+.tab.active-soon{background:var(--purple);color:#fff;box-shadow:0 0 12px var(--purple);}
 
 /* ── CONFETTI ── */
 @keyframes confettiFall{
@@ -766,10 +767,11 @@ function renderHome() {
   <div class="tabs">
     <button class="tab ${activeTab==='request'?'active-pink':''}" onclick="setTab('request')">▶ REQUEST</button>
     <button class="tab ${activeTab==='plex'?'active-green':''}" onclick="setTab('plex')">★ NOW ON PLEX</button>
+    <button class="tab ${activeTab==='soon'?'active-soon':''}" onclick="setTab('soon')">⏳ COMING SOON ${requests.filter(r=>r.status==='soon').length>0?`(${requests.filter(r=>r.status==='soon').length})`:''}</button>
     <button class="tab ${activeTab==='watchlist'?'active-yellow':''}" onclick="setTab('watchlist')">♥ WATCHLIST ${watchlist.length>0?`(${watchlist.length})`:''}</button>
   </div>
 
-  ${activeTab==='request' ? renderRequestTab(statsBanner) : activeTab==='plex' ? renderPlexTab() : renderWatchlistTab()}
+  ${activeTab==='request' ? renderRequestTab(statsBanner) : activeTab==='plex' ? renderPlexTab() : activeTab==='soon' ? renderComingSoonTab() : renderWatchlistTab()}
   `;
 }
 
@@ -919,6 +921,35 @@ function renderPlexTab() {
           </div>
         </div>`).join('')}
     </div>` : ''}`;
+}
+
+function renderComingSoonTab() {
+  const soon = requests.filter(r=>r.status==='soon');
+  if (soon.length === 0) return `
+    <div class="empty" style="border-color:var(--purple);border-style:solid;">
+      <p style="color:var(--purple);animation:blink 1s step-start infinite;">⏳ NOTHING YET ★</p>
+      <p style="margin-top:0.5rem;">COMING SOON TITLES WILL APPEAR HERE</p>
+    </div>`;
+  return `
+    <p style="font-family:'Press Start 2P',monospace;font-size:0.6rem;color:var(--purple);text-shadow:0 0 8px var(--purple);margin-bottom:1rem;">⏳ COMING SOON (${soon.length})</p>
+    <div style="display:flex;flex-direction:column;gap:0.75rem;">
+      ${soon.map(r=>`
+        <div style="display:flex;align-items:center;gap:1rem;background:var(--card2);border:2px solid rgba(168,85,247,0.4);padding:0.75rem;position:relative;overflow:hidden;">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(to right,var(--purple),var(--pink));"></div>
+          ${r.poster
+            ? `<img src="${r.poster}" style="width:50px;height:75px;object-fit:cover;flex-shrink:0;border:1px solid rgba(168,85,247,0.4);" alt="">`
+            : `<div style="width:50px;height:75px;background:var(--card);flex-shrink:0;border:1px solid rgba(168,85,247,0.3);"></div>`}
+          <div style="flex:1;min-width:0;">
+            <div style="font-family:'Press Start 2P',monospace;font-size:0.6rem;color:#fff;margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.title)}</div>
+            <div style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--cyan);opacity:0.7;margin-bottom:4px;">${r.year||'?'} · ${r.type==='series'?'TV':'FILM'}${r.season?' · '+esc(r.season):''}</div>
+            <div style="font-family:'Press Start 2P',monospace;font-size:0.38rem;color:rgba(255,255,255,0.4);">REQ BY ${esc((r.requested_by||'').toUpperCase())}</div>
+            ${r.admin_note?`<div style="font-family:'Press Start 2P',monospace;font-size:0.4rem;color:var(--yellow);margin-top:5px;line-height:1.8;">"${esc(r.admin_note)}"</div>`:''}
+          </div>
+          <div style="font-family:'Press Start 2P',monospace;font-size:0.45rem;color:var(--purple);text-shadow:0 0 8px var(--purple);flex-shrink:0;text-align:right;animation:blink 2s step-start infinite;">
+            ⏳ SOON
+          </div>
+        </div>`).join('')}
+    </div>`;
 }
 
 function renderWatchlistTab() {
