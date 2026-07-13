@@ -467,7 +467,7 @@ footer{
 // CONFIG
 // ═══════════════════════════════════════
 const TMDB_KEY = '09a47ac6e1008869c6cce1c5a5508cf8';
-const CINEPLEX_URL = 'https://proud-ahoy-filling.ngrok-free.dev';
+const CINEPLEX_URL = 'https://watch.natescineplex.com';
 const TMDB_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIwOWE0N2FjNmUxMDA4ODY5YzZjY2UxYzVhNTUwOGNmOCIsIm5iZiI6MTc4MDk4ODA3My44MDQ5OTk4LCJzdWIiOiI2YTI3YjhhOWQwYzdmNjUwNDY5NTRkNTciLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.CT60rm8H86wGez_1dydxmkLVmx6fXb0gNUN7ladsvzk';
 const TMDB = 'https://api.themoviedb.org/3';
 const IMG  = 'https://image.tmdb.org/t/p/w500';
@@ -770,7 +770,7 @@ function renderHome() {
     <button class="tab ${activeTab==='plex'?'active-green':''}" onclick="setTab('plex')">★ NOW ON PLEX</button>
     <button class="tab ${activeTab==='soon'?'active-soon':''}" onclick="setTab('soon')">⏳ COMING SOON ${requests.filter(r=>r.status==='soon').length>0?`(${requests.filter(r=>r.status==='soon').length})`:''}</button>
     <button class="tab ${activeTab==='watchlist'?'active-yellow':''}" onclick="setTab('watchlist')">♥ WATCHLIST ${watchlist.length>0?`(${watchlist.length})`:''}</button>
-    <button class="tab" style="color:var(--purple);border-left:2px solid var(--muted);text-shadow:0 0 6px var(--purple);" onclick="window.location.href=CINEPLEX_URL">🎬 THEATRE</button>
+ <button class="tab" style="color:var(--purple);border-left:2px solid var(--muted);text-shadow:0 0 6px var(--purple);" onclick="window.location.href=CINEPLEX_URL">🎬 THEATRE</button>
   </div>
 
   ${activeTab==='request' ? renderRequestTab(statsBanner) : activeTab==='plex' ? renderPlexTab() : activeTab==='soon' ? renderComingSoonTab() : renderWatchlistTab()}
